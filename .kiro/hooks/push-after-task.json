@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Push to GitHub after task completion",
+      "trigger": "Stop",
+      "description": "At the end of every Kiro session/agent stop, stages and pushes any uncommitted changes to GitHub",
+      "action": {
+        "type": "command",
+        "command": "cd C:\\Users\\Hp\\Documents\\snovyasis && git add . && git diff --cached --quiet || git commit -m \"feat: LedgerLine update - $(Get-Date -Format 'yyyy-MM-dd HH:mm')\" && git push origin master",
+        "timeout": 60
+      }
+    }
+  ]
+}
