@@ -1,7 +1,7 @@
 {
   "name": "financial-ledger-server",
   "version": "1.0.0",
-  "description": "Express API for the Financial Ledger double-entry bookkeeping system",
+  "description": "Express API for the LedgerLine double-entry bookkeeping system (MongoDB)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -11,8 +11,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "pg": "^8.12.0",
-    "uuid": "^10.0.0"
+    "mongoose": "^8.5.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"

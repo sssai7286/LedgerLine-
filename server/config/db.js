@@ -1,17 +1,15 @@
-const { Pool } = require('pg');
-require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
+const mongoose = require('mongoose');
 
-const pool = new Pool({
-  host:     process.env.DB_HOST     || 'localhost',
-  port:     parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME     || 'financial_ledger',
-  user:     process.env.DB_USER     || 'postgres',
-  password: process.env.DB_PASSWORD || '',
-});
+const connectDB = async () => {
+  try {
+    const conn = await mongoose.connect(process.env.MONGO_URI, {
+      // Mongoose 8 no longer needs useNewUrlParser / useUnifiedTopology
+    });
+    console.log(`MongoDB connected: ${conn.connection.host}`);
+  } catch (err) {
+    console.error('MongoDB connection error:', err.message);
+    process.exit(1);
+  }
+};
 
-pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL client error:', err);
-  process.exit(-1);
-});
-
-module.exports = pool;
+module.exports = connectDB;

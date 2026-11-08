@@ -1,118 +1,126 @@
-const pool = require('../config/db');
+const mongoose    = require('mongoose');
+const Transaction  = require('../models/Transaction');
+const JournalEntry = require('../models/JournalEntry');
+const Account      = require('../models/Account');
 
-// GET /api/transactions
+// ── GET /api/transactions ─────────────────────────────────────────
 const getAllTransactions = async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      'SELECT * FROM transactions ORDER BY created_at DESC'
-    );
-    res.json(rows);
+    const transactions = await Transaction.find().sort({ created_at: -1 });
+    res.json(transactions);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch transactions' });
   }
 };
 
-// POST /api/transactions
+// ── POST /api/transactions ────────────────────────────────────────
 // Body: { idempotency_key, description, entries: [{ account_id, amount }] }
 //
-// Double-entry rule enforced here:
+// Double-entry rule enforced here (application layer):
 //   SUM(entries[].amount) must equal 0
 //   e.g. [{ account_id: A, amount: -10000 }, { account_id: B, amount: 10000 }]
 //
-// All inserts run inside a single DB transaction so either everything
-// commits or nothing does.
+// All writes run inside a MongoDB session (transaction) so either
+// everything commits or nothing does — atomic write guarantee.
 const createTransaction = async (req, res) => {
   const { idempotency_key, description, entries } = req.body;
 
-  // --- Validation ---
+  // ── Basic validation ──────────────────────────────────────────
   if (!idempotency_key) {
     return res.status(400).json({ error: 'idempotency_key is required' });
   }
   if (!Array.isArray(entries) || entries.length < 2) {
-    return res.status(400).json({ error: 'entries must be an array with at least 2 legs' });
-  }
-
-  // Enforce double-entry balance at the application layer
-  const netAmount = entries.reduce((sum, e) => sum + Number(e.amount), 0);
-  if (netAmount !== 0) {
     return res.status(400).json({
-      error: `Unbalanced transaction: entries sum to ${netAmount}, must be 0`,
+      error: 'entries must be an array with at least 2 legs',
     });
   }
 
-  // Validate individual entries
+  // ── Double-entry balance check ────────────────────────────────
+  const netAmount = entries.reduce((sum, e) => sum + Number(e.amount), 0);
+  if (netAmount !== 0) {
+    return res.status(400).json({
+      error: `Unbalanced transaction: entries sum to ${netAmount} cents, must be 0`,
+    });
+  }
+
+  // ── Per-entry validation ──────────────────────────────────────
   for (const entry of entries) {
     if (!entry.account_id || entry.amount === undefined) {
       return res.status(400).json({ error: 'Each entry needs account_id and amount' });
     }
     if (!Number.isInteger(Number(entry.amount)) || Number(entry.amount) === 0) {
-      return res.status(400).json({ error: 'amount must be a non-zero integer (cents)' });
+      return res.status(400).json({
+        error: 'amount must be a non-zero integer (smallest currency unit, e.g. cents)',
+      });
+    }
+    if (!mongoose.Types.ObjectId.isValid(entry.account_id)) {
+      return res.status(400).json({ error: `Invalid account_id: ${entry.account_id}` });
     }
   }
 
-  const client = await pool.connect();
+  // ── Verify all accounts exist ─────────────────────────────────
+  const accountIds = entries.map((e) => e.account_id);
+  const foundAccounts = await Account.find({ _id: { $in: accountIds } });
+  if (foundAccounts.length !== new Set(accountIds).size) {
+    return res.status(404).json({ error: 'One or more account_ids do not exist' });
+  }
+
+  // ── Atomic write using MongoDB session ────────────────────────
+  const session = await mongoose.startSession();
   try {
-    await client.query('BEGIN');
+    session.startTransaction();
 
-    // Insert the transaction header
-    const txResult = await client.query(
-      `INSERT INTO transactions (idempotency_key, description)
-       VALUES ($1, $2) RETURNING *`,
-      [idempotency_key, description || null]
+    // 1. Create the transaction header
+    const [transaction] = await Transaction.create(
+      [{ idempotency_key, description: description || null }],
+      { session }
     );
-    const transaction = txResult.rows[0];
 
-    // Insert all journal entry legs
-    const insertedEntries = [];
-    for (const entry of entries) {
-      const jeResult = await client.query(
-        `INSERT INTO journal_entries (transaction_id, account_id, amount)
-         VALUES ($1, $2, $3) RETURNING *`,
-        [transaction.id, entry.account_id, entry.amount]
-      );
-      insertedEntries.push(jeResult.rows[0]);
-    }
+    // 2. Create all journal entry legs
+    const entryDocs = entries.map((e) => ({
+      transaction_id: transaction._id,
+      account_id:     e.account_id,
+      amount:         Number(e.amount),
+    }));
+    const insertedEntries = await JournalEntry.create(entryDocs, { session });
 
-    await client.query('COMMIT');
+    await session.commitTransaction();
 
     res.status(201).json({ transaction, entries: insertedEntries });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await session.abortTransaction();
     console.error(err);
 
-    // Handle duplicate idempotency key gracefully
-    if (err.code === '23505') {
+    // Duplicate idempotency key → 409 Conflict
+    if (err.code === 11000) {
       return res.status(409).json({
         error: `Transaction with idempotency_key '${idempotency_key}' already exists`,
       });
     }
-
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: err.message });
+    }
     res.status(500).json({ error: err.message || 'Failed to create transaction' });
   } finally {
-    client.release();
+    session.endSession();
   }
 };
 
-// GET /api/transactions/:id/entries
+// ── GET /api/transactions/:id/entries ─────────────────────────────
 const getTransactionEntries = async (req, res) => {
-  const { id } = req.params;
   try {
-    const tx = await pool.query('SELECT * FROM transactions WHERE id = $1', [id]);
-    if (tx.rows.length === 0) {
+    const transaction = await Transaction.findById(req.params.id);
+    if (!transaction) {
       return res.status(404).json({ error: 'Transaction not found' });
     }
 
-    const { rows } = await pool.query(
-      `SELECT je.*, a.currency
-         FROM journal_entries je
-         JOIN accounts a ON a.id = je.account_id
-        WHERE je.transaction_id = $1
-        ORDER BY je.created_at`,
-      [id]
-    );
+    // Populate account currency so the frontend can format amounts
+    const entries = await JournalEntry.find({ transaction_id: transaction._id })
+      .populate('account_id', 'account_name account_type currency')
+      .sort({ created_at: 1 });
 
-    res.json({ transaction: tx.rows[0], entries: rows });
+    res.json({ transaction, entries });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch journal entries' });
