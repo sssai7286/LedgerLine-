@@ -60,6 +60,6 @@ userSchema.methods.matchPassword = async function (plain) {
   return bcrypt.compare(plain, this.password);
 };
 
-userSchema.index({ email: 1 }, { unique: true });
+// index already declared via `unique: true` on the field — no extra index needed
 
 module.exports = mongoose.model('User', userSchema);

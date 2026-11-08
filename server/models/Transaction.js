@@ -67,7 +67,7 @@ const transactionSchema = new mongoose.Schema(
   }
 );
 
-transactionSchema.index({ idempotency_key: 1 }, { unique: true });
+// unique: true on the field already creates the index
 transactionSchema.index({ initiated_by: 1 });
 
 module.exports = mongoose.model('Transaction', transactionSchema);
