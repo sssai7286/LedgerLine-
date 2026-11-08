@@ -5,21 +5,22 @@ const mongoose = require('mongoose');
  * -------
  * Represents a ledger account owned by a user.
  *
- * account_type follows standard bookkeeping categories:
- *   ASSET      – things owned (cash, receivables)
- *   LIABILITY  – things owed  (loans, payables)
- *   EQUITY     – net worth / capital
- *   INCOME     – revenue earned
- *   EXPENSE    – costs incurred
+ * account_type:
+ *   ASSET / LIABILITY / EQUITY / INCOME / EXPENSE
  *
- * currency is a 3-letter ISO 4217 code (USD, EUR, INR …)
+ * balance_cents: denormalised running balance (integer, cents).
+ *   Kept in sync by every deposit/withdrawal/transfer operation.
+ *   Updated atomically using findOneAndUpdate with $inc so
+ *   concurrent requests never produce a race condition.
+ *   Server-side CHECK: balance_cents >= 0 is enforced before
+ *   any debit is committed.
  */
 const accountSchema = new mongoose.Schema(
   {
-    owner_id: {
-      type: String,
-      required: [true, 'owner_id is required'],
-      trim: true,
+    user_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'user_id is required'],
     },
     account_name: {
       type: String,
@@ -33,6 +34,7 @@ const accountSchema = new mongoose.Schema(
         values: ['ASSET', 'LIABILITY', 'EQUITY', 'INCOME', 'EXPENSE'],
         message: 'account_type must be ASSET, LIABILITY, EQUITY, INCOME, or EXPENSE',
       },
+      default: 'ASSET',
     },
     currency: {
       type: String,
@@ -44,12 +46,25 @@ const accountSchema = new mongoose.Schema(
         message: 'currency must be a 3-letter ISO 4217 code (e.g. USD)',
       },
     },
+    // Denormalised balance — integer cents, always >= 0 for ASSET accounts
+    balance_cents: {
+      type: Number,
+      default: 0,
+      validate: {
+        validator: Number.isInteger,
+        message: 'balance_cents must be an integer',
+      },
+    },
+    is_active: {
+      type: Boolean,
+      default: true,
+    },
   },
   {
-    timestamps: { createdAt: 'created_at', updatedAt: false },
+    timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
   }
 );
 
-accountSchema.index({ owner_id: 1 });
+accountSchema.index({ user_id: 1 });
 
 module.exports = mongoose.model('Account', accountSchema);

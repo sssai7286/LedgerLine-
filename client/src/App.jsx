@@ -1,35 +1,57 @@
 import React, { useState } from 'react';
-import AccountList     from './components/AccountList';
-import TransactionForm from './components/TransactionForm';
-import JournalEntries  from './components/JournalEntries';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import AuthPage            from './components/AuthPage';
+import Navbar              from './components/Navbar';
+import AccountList         from './components/AccountList';
+import LedgerOperations    from './components/LedgerOperations';
+import TransactionHistory  from './components/TransactionHistory';
+import AuditLogViewer      from './components/AuditLogViewer';
 
-export default function App() {
-  // Increment to trigger JournalEntries to re-fetch after a new transaction
-  const [txRefresh, setTxRefresh] = useState(0);
+function Dashboard() {
+  const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState('Dashboard');
+  const [refresh,   setRefresh]   = useState(0);
+
+  const bump = () => setRefresh((n) => n + 1);
 
   return (
-    <div style={styles.container}>
-      <header style={styles.header}>
-        <h1 style={{ margin: 0 }}>📒 Financial Ledger</h1>
-        <p style={{ margin: '4px 0 0', color: '#94a3b8', fontSize: 14 }}>
-          Double-entry bookkeeping — every transaction balances to zero
-        </p>
-      </header>
+    <div style={s.app}>
+      <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      <main style={styles.main}>
-        <AccountList />
-        <hr style={styles.divider} />
-        <TransactionForm onCreated={() => setTxRefresh((n) => n + 1)} />
-        <hr style={styles.divider} />
-        <JournalEntries refresh={txRefresh} />
+      <main style={s.main}>
+        {activeTab === 'Dashboard' && (
+          <AccountList onSelect={() => setActiveTab('Transactions')} />
+        )}
+        {activeTab === 'Operations' && (
+          <LedgerOperations onDone={bump} />
+        )}
+        {activeTab === 'Transactions' && (
+          <TransactionHistory refresh={refresh} />
+        )}
+        {activeTab === 'Audit Log' && ['ADMIN', 'AUDITOR'].includes(user?.role) && (
+          <AuditLogViewer />
+        )}
       </main>
     </div>
   );
 }
 
-const styles = {
-  container: { fontFamily: 'system-ui, sans-serif', minHeight: '100vh', background: '#f8fafc' },
-  header:    { background: '#1e293b', color: '#fff', padding: '20px 32px' },
-  main:      { maxWidth: 1100, margin: '0 auto', padding: '32px 24px' },
-  divider:   { border: 'none', borderTop: '1px solid #e5e7eb', margin: '32px 0' },
+function AppInner() {
+  const { user, loading } = useAuth();
+  if (loading) return <div style={s.loading}>Loading…</div>;
+  return user ? <Dashboard /> : <AuthPage />;
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppInner />
+    </AuthProvider>
+  );
+}
+
+const s = {
+  app:     { minHeight: '100vh', background: '#f8fafc' },
+  main:    { maxWidth: 1200, margin: '0 auto', padding: '32px 24px' },
+  loading: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 18 },
 };

@@ -1,10 +1,16 @@
 const Account      = require('../models/Account');
 const JournalEntry = require('../models/JournalEntry');
+const AuditLog     = require('../models/AuditLog');
 
 // ── GET /api/accounts ────────────────────────────────────────────
+// ADMIN / AUDITOR → all accounts
+// ACCOUNT_HOLDER  → own accounts only
 const getAllAccounts = async (req, res) => {
   try {
-    const accounts = await Account.find().sort({ created_at: -1 });
+    const filter = req.user.role === 'ACCOUNT_HOLDER'
+      ? { user_id: req.user._id }
+      : {};
+    const accounts = await Account.find(filter).sort({ created_at: -1 });
     res.json(accounts);
   } catch (err) {
     console.error(err);
@@ -13,58 +19,96 @@ const getAllAccounts = async (req, res) => {
 };
 
 // ── POST /api/accounts ───────────────────────────────────────────
-// Body: { owner_id, account_name, account_type, currency }
+// ADMIN or ACCOUNT_HOLDER (creates account for themselves)
 const createAccount = async (req, res) => {
-  const { owner_id, account_name, account_type, currency } = req.body;
+  const { account_name, account_type, currency } = req.body;
 
-  if (!owner_id || !account_name || !account_type || !currency) {
-    return res.status(400).json({
-      error: 'owner_id, account_name, account_type, and currency are required',
-    });
+  if (!account_name || !currency) {
+    return res.status(400).json({ error: 'account_name and currency are required' });
   }
 
   try {
     const account = await Account.create({
-      owner_id,
+      user_id:      req.user._id,
       account_name,
-      account_type: account_type.toUpperCase(),
+      account_type: account_type?.toUpperCase() || 'ASSET',
       currency:     currency.toUpperCase(),
+      balance_cents: 0,
     });
+
+    await AuditLog.create({
+      user_id:    req.user._id,
+      user_email: req.user.email,
+      role:       req.user.role,
+      action:     'ACCOUNT_CREATE',
+      resource:   'Account',
+      resource_id: account._id.toString(),
+      meta:       { account_name, currency, account_type },
+      ip:         req.ip,
+      status:     'SUCCESS',
+    });
+
     res.status(201).json(account);
   } catch (err) {
-    console.error(err);
-    // Mongoose validation error
     if (err.name === 'ValidationError') {
       return res.status(400).json({ error: err.message });
     }
+    console.error(err);
     res.status(500).json({ error: 'Failed to create account' });
   }
 };
 
+// ── GET /api/accounts/:id ────────────────────────────────────────
+const getAccount = async (req, res) => {
+  try {
+    const account = await Account.findById(req.params.id);
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+
+    // ACCOUNT_HOLDER can only see own accounts
+    if (
+      req.user.role === 'ACCOUNT_HOLDER' &&
+      account.user_id.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    res.json(account);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch account' });
+  }
+};
+
 // ── GET /api/accounts/:id/balance ────────────────────────────────
-// Running balance = SUM of all journal entry amounts for this account.
-// Positive → net debit balance   (normal for ASSET / EXPENSE)
-// Negative → net credit balance  (normal for LIABILITY / EQUITY / INCOME)
+// Returns denormalised balance plus a live SUM from journal entries
+// to detect any drift (should always match).
 const getAccountBalance = async (req, res) => {
   try {
     const account = await Account.findById(req.params.id);
-    if (!account) {
-      return res.status(404).json({ error: 'Account not found' });
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+
+    if (
+      req.user.role === 'ACCOUNT_HOLDER' &&
+      account.user_id.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
+    // Aggregate live balance from journal entries for integrity check
     const result = await JournalEntry.aggregate([
       { $match: { account_id: account._id } },
-      { $group: { _id: null, balance: { $sum: '$amount' } } },
+      { $group: { _id: null, live_balance: { $sum: '$amount' } } },
     ]);
-
-    const balance = result.length > 0 ? result[0].balance : 0;
+    const live_balance = result.length > 0 ? result[0].live_balance : 0;
 
     res.json({
-      account_id:   account._id,
-      account_name: account.account_name,
-      account_type: account.account_type,
-      currency:     account.currency,
-      balance,              // integer cents
+      account_id:       account._id,
+      account_name:     account.account_name,
+      account_type:     account.account_type,
+      currency:         account.currency,
+      balance_cents:    account.balance_cents,  // denormalised
+      live_balance,                             // from journal — must match
+      balanced:         account.balance_cents === live_balance,
     });
   } catch (err) {
     console.error(err);
@@ -72,4 +116,29 @@ const getAccountBalance = async (req, res) => {
   }
 };
 
-module.exports = { getAllAccounts, createAccount, getAccountBalance };
+// ── GET /api/accounts/:id/statement ──────────────────────────────
+// All journal entries for an account (transaction statement)
+const getStatement = async (req, res) => {
+  try {
+    const account = await Account.findById(req.params.id);
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+
+    if (
+      req.user.role === 'ACCOUNT_HOLDER' &&
+      account.user_id.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const entries = await JournalEntry.find({ account_id: account._id })
+      .populate('transaction_id', 'type description created_at idempotency_key')
+      .sort({ created_at: -1 });
+
+    res.json({ account, entries });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch statement' });
+  }
+};
+
+module.exports = { getAllAccounts, createAccount, getAccount, getAccountBalance, getStatement };

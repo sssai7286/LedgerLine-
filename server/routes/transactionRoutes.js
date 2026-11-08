@@ -1,13 +1,11 @@
 const express = require('express');
 const router  = express.Router();
-const {
-  getAllTransactions,
-  createTransaction,
-  getTransactionEntries,
-} = require('../controllers/transactionController');
+const { getAllTransactions, getTransactionEntries } = require('../controllers/transactionController');
+const { protect } = require('../middleware/auth');
+
+router.use(protect);
 
 router.get('/',             getAllTransactions);
-router.post('/',            createTransaction);
 router.get('/:id/entries',  getTransactionEntries);
 
 module.exports = router;
