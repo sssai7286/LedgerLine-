@@ -119,3 +119,19 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_user_id   ON audit_logs (user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_action    ON audit_logs (action);
 CREATE INDEX IF NOT EXISTS idx_audit_created   ON audit_logs (created_at DESC);
+
+CREATE OR REPLACE FUNCTION fn_reject_audit_log_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_logs is append-only';
+END; $$;
+
+DROP TRIGGER IF EXISTS trg_audit_logs_no_update_delete ON audit_logs;
+CREATE TRIGGER trg_audit_logs_no_update_delete
+    BEFORE UPDATE OR DELETE ON audit_logs
+    FOR EACH ROW EXECUTE FUNCTION fn_reject_audit_log_mutation();
+
+DROP TRIGGER IF EXISTS trg_audit_logs_no_truncate ON audit_logs;
+CREATE TRIGGER trg_audit_logs_no_truncate
+    BEFORE TRUNCATE ON audit_logs
+    FOR EACH STATEMENT EXECUTE FUNCTION fn_reject_audit_log_mutation();

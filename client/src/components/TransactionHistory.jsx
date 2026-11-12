@@ -1,121 +1,204 @@
-import React, { useEffect, useState } from 'react';
-import { fetchTransactions, fetchTransactionEntries } from '../api/api';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { fetchTransactions, fetchTransactionEntries, getErrorMessage } from '../api/api';
 
-const typeColor = { DEPOSIT: '#16a34a', WITHDRAWAL: '#dc2626', TRANSFER: '#2563eb' };
+const TYPE_STYLES = {
+  DEPOSIT: { background: '#eaf8ef', color: '#18834d', label: 'Deposit' },
+  WITHDRAWAL: { background: '#fff0f0', color: '#bd4646', label: 'Withdrawal' },
+  TRANSFER: { background: '#eef4ff', color: '#315fbd', label: 'Transfer' },
+};
 const fmt = (cents, currency = 'USD') =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(cents / 100);
+  new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(cents || 0) / 100);
+const dateTime = (value) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Date unavailable' : date.toLocaleString();
+};
 
 export default function TransactionHistory({ refresh }) {
-  const [txns,     setTxns]     = useState([]);
+  const [transactions, setTransactions] = useState([]);
   const [selected, setSelected] = useState(null);
-  const [detail,   setDetail]   = useState(null);
-  const [error,    setError]    = useState('');
+  const [detail, setDetail] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('ALL');
+  const requestId = useRef(0);
 
-  useEffect(() => {
-    fetchTransactions()
-      .then(setTxns)
-      .catch(() => setError('Failed to load transactions'));
-  }, [refresh]);
-
-  const loadDetail = async (tx) => {
-    setDetail(null);
-    setSelected(tx.id);
+  const loadTransactions = async () => {
+    setLoading(true);
+    setError('');
     try {
-      const d = await fetchTransactionEntries(tx.id);
-      setDetail(d);
-    } catch { setError('Failed to load entries'); }
+      const data = await fetchTransactions();
+      setTransactions(data);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
+  useEffect(() => { loadTransactions(); }, [refresh]);
+
+  const filteredTransactions = useMemo(() => {
+    const search = query.trim().toLowerCase();
+    return transactions.filter((transaction) => {
+      const matchesType = typeFilter === 'ALL' || transaction.type === typeFilter;
+      const searchable = [
+        transaction.description,
+        transaction.id,
+        transaction.initiated_by_email,
+        transaction.initiated_by_name,
+        transaction.type,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return matchesType && (!search || searchable.includes(search));
+    });
+  }, [transactions, query, typeFilter]);
+
+  const loadDetail = async (transaction) => {
+    const currentRequest = requestId.current + 1;
+    requestId.current = currentRequest;
+    setSelected(transaction.id);
+    setDetail(null);
+    setError('');
+    setDetailLoading(true);
+    try {
+      const data = await fetchTransactionEntries(transaction.id);
+      if (requestId.current === currentRequest) setDetail(data);
+    } catch (err) {
+      if (requestId.current === currentRequest) setError(getErrorMessage(err));
+    } finally {
+      if (requestId.current === currentRequest) setDetailLoading(false);
+    }
+  };
+
+  const net = detail?.entries.reduce((sum, entry) => sum + Number(entry.amount), 0);
+
   return (
-    <section style={s.section}>
-      <h2 style={{ color: '#1e293b', marginBottom: 16 }}>Transaction History</h2>
-      {error && <p role="alert" style={{ color: '#dc2626' }}>{error}</p>}
-
-      <div style={s.layout}>
-        <div style={s.list}>
-          {txns.length === 0 && <p style={{ color: '#94a3b8', fontSize: 14 }}>No transactions yet</p>}
-          {txns.map((tx) => (
-            <button key={tx.id} onClick={() => loadDetail(tx)}
-              style={{ ...s.txBtn, borderColor: selected === tx.id ? '#2563eb' : '#e2e8f0',
-                background: selected === tx.id ? '#eff6ff' : '#fff' }}>
-              <div style={s.txTop}>
-                <span style={{ ...s.typeBadge, background: typeColor[tx.type] }}>{tx.type}</span>
-                <span style={s.txAmt}>{fmt(tx.amount_cents, tx.currency)}</span>
-              </div>
-              <div style={s.txDesc}>{tx.description || '—'}</div>
-              <div style={s.txDate}>{new Date(tx.created_at).toLocaleString()}</div>
-            </button>
-          ))}
+    <section className="panel transactions-panel">
+      <div className="section-heading">
+        <div>
+          <h1 className="page-heading">Transactions</h1>
+          <p className="page-subtitle">Search activity and inspect the balanced journal entries behind each posting.</p>
         </div>
-
-        <div style={s.detail}>
-          {!detail && <p style={{ color: '#94a3b8', fontSize: 14 }}>Select a transaction to view journal entries</p>}
-          {detail && (
-            <>
-              <h3 style={{ margin: '0 0 4px', color: '#1e293b' }}>
-                {detail.transaction.description || '(no description)'}
-              </h3>
-              <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
-                ID: <span style={{ fontFamily: 'monospace' }}>{detail.transaction.id}</span>
-                &nbsp;·&nbsp;
-                By: {detail.transaction.initiated_by_email || 'unknown'}
-              </p>
-
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    {['Account','Type','Amount','Currency'].map((h) => (
-                      <th key={h} style={s.th}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.entries.map((e) => (
-                    <tr key={e.id}>
-                      <td style={s.td}>{e.account_name || 'External clearing'}</td>
-                      <td style={{ ...s.td, color: e.amount > 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
-                        {e.amount > 0 ? 'Debit' : 'Credit'}
-                      </td>
-                      <td style={{ ...s.td, fontFamily: 'monospace', textAlign: 'right' }}>
-                        {fmt(Math.abs(Number(e.amount)), e.currency || detail.transaction.currency)}
-                      </td>
-                      <td style={s.td}>{e.currency || detail.transaction.currency}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                {detail.entries.length > 0 && (
-                  <tfoot>
-                    <tr>
-                      <td colSpan={2} style={{ ...s.td, fontWeight: 700 }}>Net (must be 0)</td>
-                      <td style={{ ...s.td, fontFamily: 'monospace', textAlign: 'right', fontWeight: 700,
-                        color: detail.entries.reduce((sum, e) => sum + Number(e.amount), 0) === 0 ? '#16a34a' : '#dc2626' }}>
-                        {detail.entries.reduce((sum, e) => sum + Number(e.amount), 0)} cents
-                      </td>
-                      <td style={s.td}></td>
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </>
-          )}
-        </div>
+        <button type="button" className="button button-secondary" onClick={loadTransactions} disabled={loading}>
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
+
+      <div className="transactions-toolbar">
+        <input
+          className="field"
+          type="search"
+          placeholder="Search description, account holder, or ID"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          aria-label="Search transactions"
+        />
+        <select
+          className="select-field"
+          value={typeFilter}
+          onChange={(event) => setTypeFilter(event.target.value)}
+          aria-label="Filter by transaction type"
+        >
+          <option value="ALL">All transaction types</option>
+          <option value="DEPOSIT">Deposits</option>
+          <option value="WITHDRAWAL">Withdrawals</option>
+          <option value="TRANSFER">Transfers & journals</option>
+        </select>
+        <span className="form-hint" aria-live="polite">
+          {filteredTransactions.length} of {transactions.length} transactions
+        </span>
+      </div>
+
+      {error && <p role="alert" className="form-error" style={{ marginBottom: 15 }}>{error}</p>}
+
+      {loading ? <div className="loading-state">Loading transaction history…</div> : (
+        <div className="transaction-layout">
+          <div className="transaction-list" aria-label="Transaction results">
+            {filteredTransactions.map((transaction) => {
+              const style = TYPE_STYLES[transaction.type] || TYPE_STYLES.TRANSFER;
+              return (
+                <button
+                  type="button"
+                  key={transaction.id}
+                  className={`transaction-card${selected === transaction.id ? ' transaction-card-selected' : ''}`}
+                  onClick={() => loadDetail(transaction)}
+                  aria-pressed={selected === transaction.id}
+                >
+                  <div className="transaction-topline">
+                    <span className="transaction-badge" style={{ background: style.background, color: style.color }}>
+                      {style.label}
+                    </span>
+                    <span className="transaction-amount">{fmt(transaction.amount_cents, transaction.currency)}</span>
+                  </div>
+                  <div className="transaction-description">{transaction.description || 'No description'}</div>
+                  <div className="transaction-date">{dateTime(transaction.created_at)}</div>
+                </button>
+              );
+            })}
+            {filteredTransactions.length === 0 && (
+              <div className="empty-state">
+                {transactions.length === 0
+                  ? 'No transactions yet. Completed deposits, withdrawals, and transfers will appear here.'
+                  : 'No transactions match your search. Try another term or transaction type.'}
+              </div>
+            )}
+          </div>
+
+          <div className="panel transaction-detail" aria-live="polite">
+            {!selected && (
+              <div className="empty-state">
+                Select a transaction to review its journal entries and audit details.
+              </div>
+            )}
+            {detailLoading && <div className="loading-state">Loading journal entries…</div>}
+            {detail && (
+              <>
+                <h2 className="detail-title">{detail.transaction.description || 'Journal transaction'}</h2>
+                <div className="detail-meta">
+                  <span>{dateTime(detail.transaction.created_at)}</span>
+                  <span>By {detail.transaction.initiated_by_name || detail.transaction.initiated_by_email || 'Unknown'}</span>
+                  <code title={detail.transaction.id}>ID {detail.transaction.id}</code>
+                </div>
+                <div className="table-wrap">
+                  <table className="entries-table">
+                    <thead>
+                      <tr>
+                        <th>Account</th>
+                        <th>Entry</th>
+                        <th className="number-cell">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.entries.map((entry) => (
+                        <tr key={entry.id}>
+                          <td>{entry.account_name || 'External clearing'}</td>
+                          <td className={Number(entry.amount) > 0 ? 'positive-text' : 'negative-text'}>
+                            {Number(entry.amount) > 0 ? 'Debit' : 'Credit'}
+                          </td>
+                          <td className="number-cell">
+                            {fmt(Math.abs(Number(entry.amount)), entry.currency || detail.transaction.currency)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {detail.entries.length > 0 && (
+                      <tfoot>
+                        <tr>
+                          <td colSpan={2}>Net ledger impact</td>
+                          <td className={`number-cell ${net === 0 ? 'positive-text' : 'negative-text'}`}>
+                            {Number.isSafeInteger(net) ? `${net} cents` : 'Out of range'}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
-
-const s = {
-  section: { marginBottom: 40 },
-  layout:  { display: 'flex', gap: 20, flexWrap: 'wrap' },
-  list:    { display: 'flex', flexDirection: 'column', gap: 8, width: 280, flexShrink: 0 },
-  txBtn:   { border: '1px solid', borderRadius: 8, padding: '12px 14px', textAlign: 'left', cursor: 'pointer', width: '100%' },
-  txTop:   { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  typeBadge: { color: '#fff', borderRadius: 10, padding: '2px 8px', fontSize: 11, fontWeight: 700 },
-  txAmt:   { fontWeight: 700, fontSize: 15, color: '#1e293b' },
-  txDesc:  { fontSize: 13, color: '#475569', marginBottom: 2 },
-  txDate:  { fontSize: 11, color: '#94a3b8' },
-  detail:  { flex: 1, minWidth: 300, background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', padding: 20 },
-  table:   { width: '100%', borderCollapse: 'collapse', fontSize: 14 },
-  th:      { textAlign: 'left', padding: '8px 10px', borderBottom: '2px solid #e2e8f0', background: '#f8fafc', color: '#64748b', fontSize: 12, fontWeight: 600, textTransform: 'uppercase' },
-  td:      { padding: '8px 10px', borderBottom: '1px solid #f1f5f9', color: '#1e293b' },
-};

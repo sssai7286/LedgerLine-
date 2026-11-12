@@ -1,116 +1,292 @@
-import React, { useEffect, useState } from 'react';
-import { deposit, withdraw, transfer, fetchAccounts } from '../api/api';
+import React, { useEffect, useMemo, useState } from 'react';
+import { deposit, withdraw, transfer, fetchAccounts, getErrorMessage } from '../api/api';
 import { v4 as uuidv4 } from 'uuid';
+import { CURRENCIES } from '../constants/currencies';
 
 const TABS = ['Deposit', 'Withdraw', 'Transfer'];
+const initialForm = (accountId = '') => ({
+  account_id: accountId,
+  from_account_id: accountId,
+  to_account_id: '',
+  amount: '',
+  currency: 'USD',
+  description: '',
+});
+const formatMoney = (cents, currency) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(cents || 0) / 100);
 
-export default function LedgerOperations({ onDone }) {
-  const [tab,      setTab]      = useState('Deposit');
+export default function LedgerOperations({ onDone, initialAccountId = '' }) {
+  const [tab, setTab] = useState('Deposit');
   const [accounts, setAccounts] = useState([]);
-  const [form,     setForm]     = useState({});
-  const [error,    setError]    = useState('');
-  const [success,  setSuccess]  = useState('');
-  const [busy,     setBusy]     = useState(false);
+  const [form, setForm] = useState(() => initialForm(initialAccountId));
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
+  const loadAccounts = async () => {
+    try {
+      const data = await fetchAccounts();
+      setAccounts(data);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadAccounts(); }, []);
   useEffect(() => {
-    fetchAccounts().then(setAccounts).catch(() => {});
-    setForm({});
+    if (initialAccountId) {
+      const account = accounts.find((item) => item.id === initialAccountId);
+      setForm((current) => ({
+        ...current,
+        account_id: initialAccountId,
+        from_account_id: initialAccountId,
+        currency: account?.currency || current.currency,
+      }));
+    }
+  }, [initialAccountId, accounts]);
+
+  const currencies = useMemo(() => {
+    const knownCodes = new Set(CURRENCIES.map(({ code }) => code));
+    const additional = accounts
+      .map((account) => account.currency)
+      .filter((code) => code && !knownCodes.has(code))
+      .map((code) => ({ code, name: 'Account currency' }));
+    return [...CURRENCIES, ...additional];
+  }, [accounts]);
+
+  const activeAccounts = accounts.filter((account) => account.is_active !== false);
+  const matchingAccounts = activeAccounts.filter((account) => account.currency === form.currency);
+  const sourceId = tab === 'Transfer' ? form.from_account_id : form.account_id;
+  const sourceAccount = activeAccounts.find((account) => account.id === sourceId);
+  const availableBalance = sourceAccount
+    ? formatMoney(sourceAccount.balance_cents, sourceAccount.currency)
+    : null;
+
+  const changeCurrency = (currency) => {
+    setForm((current) => ({
+      ...current,
+      currency,
+      account_id: '',
+      from_account_id: '',
+      to_account_id: '',
+    }));
     setError('');
     setSuccess('');
-  }, [tab]);
+  };
 
-  const handle = async (e) => {
-    e.preventDefault();
+  const changeAccount = (field, accountId) => {
+    const account = activeAccounts.find((item) => item.id === accountId);
+    setForm((current) => ({
+      ...current,
+      [field]: accountId,
+      ...(account ? { currency: account.currency } : {}),
+      ...(field === 'from_account_id' ? { to_account_id: '' } : {}),
+    }));
     setError('');
     setSuccess('');
-    setBusy(true);
+  };
 
-    // Parse amount to integer cents
-    const amount_cents = Math.round(parseFloat(form.amount || 0) * 100);
-    if (!amount_cents || amount_cents <= 0) {
-      setError('Enter a valid positive amount');
-      setBusy(false);
+  const handle = async (event) => {
+    event.preventDefault();
+    setError('');
+    setSuccess('');
+
+    const amount = Number(form.amount);
+    const amountCents = Math.round(amount * 100);
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isSafeInteger(amountCents)
+      || Math.abs(amount * 100 - amountCents) > 0.000001) {
+      setError('Enter an amount with up to two decimal places greater than zero.');
       return;
     }
+    if (!sourceAccount) {
+      setError('Choose an active account to continue.');
+      return;
+    }
+    if (tab === 'Transfer') {
+      const destination = activeAccounts.find((account) => account.id === form.to_account_id);
+      if (!destination) {
+        setError('Choose a destination account to continue.');
+        return;
+      }
+      if (destination.id === sourceAccount.id) {
+        setError('Choose a different destination account.');
+        return;
+      }
+      if (destination.currency !== sourceAccount.currency) {
+        setError('Transfers are only available between accounts in the same currency.');
+        return;
+      }
+    }
 
-    const idempotency_key = `${tab.toLowerCase()}-${uuidv4()}`;
+    setBusy(true);
+    const payload = {
+      ...form,
+      amount_cents: amountCents,
+      idempotency_key: `${tab.toLowerCase()}-${uuidv4()}`,
+    };
 
     try {
       if (tab === 'Deposit') {
-        await deposit({ ...form, amount_cents, idempotency_key });
-        setSuccess(`Deposited ${form.amount} ${form.currency || 'USD'} successfully`);
+        await deposit(payload);
+        setSuccess(`Deposit of ${formatMoney(amountCents, form.currency)} completed.`);
       } else if (tab === 'Withdraw') {
-        await withdraw({ ...form, amount_cents, idempotency_key });
-        setSuccess(`Withdrew ${form.amount} ${form.currency || 'USD'} successfully`);
+        await withdraw(payload);
+        setSuccess(`Withdrawal of ${formatMoney(amountCents, form.currency)} completed.`);
       } else {
-        await transfer({ ...form, amount_cents, idempotency_key });
-        setSuccess(`Transferred ${form.amount} ${form.currency || 'USD'} successfully`);
+        await transfer(payload);
+        setSuccess(`Transfer of ${formatMoney(amountCents, form.currency)} completed.`);
       }
-      setForm({});
+      setForm((current) => ({ ...current, amount: '', description: '', to_account_id: '' }));
+      await loadAccounts();
       onDone?.();
     } catch (err) {
-      setError(err.response?.data?.error || 'Operation failed');
+      setError(getErrorMessage(err));
     } finally {
       setBusy(false);
     }
   };
 
-  const f = (k, placeholder, type = 'text', opts = null) => (
-    opts
-      ? <select key={k} value={form[k] || ''} onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-          required style={s.input} aria-label={placeholder}>
-          <option value="">— {placeholder} —</option>
-          {opts.map((o) => <option key={o.id} value={o.id}>{o.account_name} ({o.currency})</option>)}
-        </select>
-      : <input key={k} type={type} placeholder={placeholder} value={form[k] || ''}
-          onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-          required={k !== 'description'} style={s.input} aria-label={placeholder} />
+  const accountSelect = (field, label, value, options, onChange) => (
+    <label className="form-field" key={field}>
+      <span className="form-label">{label}</span>
+      <select
+        className="select-field"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required
+        disabled={loading || options.length === 0}
+        aria-label={label}
+      >
+        <option value="">{loading ? 'Loading accounts…' : 'Choose an account'}</option>
+        {options.map((account) => (
+          <option key={account.id} value={account.id}>
+            {account.account_name} · {formatMoney(account.balance_cents, account.currency)}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 
   return (
-    <section style={s.section}>
-      <h2 style={s.title}>Money Operations</h2>
-
-      <div style={s.tabs}>
-        {TABS.map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            style={{ ...s.tab, ...(tab === t ? s.tabActive : {}) }}>{t}</button>
-        ))}
+    <section className="panel operations-panel">
+      <div className="operations-header">
+        <div>
+          <h1 className="page-heading">Money operations</h1>
+          <p className="page-subtitle">Move money securely between your ledger accounts.</p>
+        </div>
+        <div className="operation-tabs" role="tablist" aria-label="Money operation type">
+          {TABS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={tab === item}
+              className={`operation-tab${tab === item ? ' operation-tab-active' : ''}`}
+              onClick={() => {
+                setTab(item);
+                setError('');
+                setSuccess('');
+              }}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <form onSubmit={handle} style={s.form}>
-        {tab === 'Deposit'  && f('account_id', 'Select account', 'text', accounts)}
-        {tab === 'Withdraw' && f('account_id', 'Select account', 'text', accounts)}
-        {tab === 'Transfer' && (
-          <>
-            {f('from_account_id', 'From account', 'text', accounts)}
-            {f('to_account_id',   'To account',   'text', accounts)}
-          </>
+      <div className="operation-content">
+        {error && <p role="alert" className="form-error" style={{ marginBottom: 15 }}>{error}</p>}
+        {success && <p role="status" className="form-success" style={{ marginBottom: 15 }}>{success}</p>}
+
+        {!loading && activeAccounts.length === 0 && (
+          <div className="empty-state">
+            No active accounts are available. Create an account on the dashboard before making an operation.
+          </div>
         )}
-        {f('amount',      'Amount (e.g. 10.00)',   'number')}
-        {f('currency',    'Currency (USD)',         'text')}
-        {f('description', 'Description (optional)')}
 
-        {error   && <p role="alert"  style={s.err}>{error}</p>}
-        {success && <p role="status" style={s.ok}>{success}</p>}
+        <form className="operation-form" onSubmit={handle}>
+          <label className="form-field">
+            <span className="form-label">Currency</span>
+            <select
+              className="select-field"
+              value={form.currency}
+              onChange={(event) => changeCurrency(event.target.value)}
+              aria-label="Currency"
+            >
+              {currencies.map(({ code, name }) => (
+                <option key={code} value={code}>{code} — {name}</option>
+              ))}
+            </select>
+            <span className="form-hint">Only accounts in this currency are shown.</span>
+          </label>
 
-        <button type="submit" disabled={busy} style={s.btn}>
-          {busy ? 'Processing…' : tab}
-        </button>
-      </form>
+          {tab === 'Transfer' ? (
+            <>
+              {accountSelect('from_account_id', 'From account', form.from_account_id, matchingAccounts,
+                (value) => changeAccount('from_account_id', value))}
+              {accountSelect('to_account_id', 'To account', form.to_account_id,
+                matchingAccounts.filter((account) => account.id !== form.from_account_id),
+                (value) => setForm((current) => ({ ...current, to_account_id: value })))}
+            </>
+          ) : accountSelect(
+            'account_id',
+            tab === 'Deposit' ? 'Deposit to account' : 'Withdraw from account',
+            form.account_id,
+            matchingAccounts,
+            (value) => changeAccount('account_id', value)
+          )}
+
+          <label className="form-field">
+            <span className="form-label">Amount</span>
+            <div className="amount-wrap">
+              <span className="amount-currency">{form.currency}</span>
+              <input
+                className="field"
+                type="number"
+                min="0.01"
+                step="0.01"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={form.amount}
+                onChange={(event) => setForm({ ...form, amount: event.target.value })}
+                required
+                aria-label="Amount"
+              />
+            </div>
+            <span className="form-hint">Enter an amount with up to two decimal places.</span>
+          </label>
+
+          <label className="form-field">
+            <span className="form-label">Description <span className="form-hint">(optional)</span></span>
+            <input
+              className="field"
+              type="text"
+              maxLength={500}
+              placeholder="Add a note for this operation"
+              value={form.description}
+              onChange={(event) => setForm({ ...form, description: event.target.value })}
+              aria-label="Description (optional)"
+            />
+          </label>
+
+          {availableBalance && (
+            <div className="account-balance-note field-full">
+              Available in {sourceAccount.account_name}: <strong>{availableBalance}</strong>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            className="button button-primary operation-submit"
+            disabled={busy || loading || activeAccounts.length === 0}
+          >
+            {busy ? 'Processing securely…' : tab}
+          </button>
+        </form>
+      </div>
     </section>
   );
 }
-
-const s = {
-  section:   { marginBottom: 40 },
-  title:     { color: '#1e293b', marginBottom: 16 },
-  tabs:      { display: 'flex', gap: 8, marginBottom: 20 },
-  tab:       { padding: '8px 20px', borderRadius: 20, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontSize: 14, color: '#475569' },
-  tabActive: { background: '#2563eb', border: '1px solid #2563eb', color: '#fff', fontWeight: 600 },
-  form:      { display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 },
-  input:     { padding: '10px 14px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 14, background: '#fff' },
-  btn:       { padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 15, fontWeight: 600 },
-  err:       { color: '#dc2626', fontSize: 13, margin: 0 },
-  ok:        { color: '#16a34a', fontSize: 13, margin: 0 },
-};

@@ -13,20 +13,25 @@ function Dashboard() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('Dashboard');
   const [refresh,   setRefresh]   = useState(0);
+  const [selectedAccountId, setSelectedAccountId] = useState('');
 
   const bump = () => setRefresh((n) => n + 1);
+  const openOperations = (account) => {
+    setSelectedAccountId(account?.id || '');
+    setActiveTab('Operations');
+  };
 
   return (
-    <div style={s.app}>
+    <div className="app-shell">
       <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      <main style={s.main}>
+      <main className="page-container">
         {activeTab === 'Dashboard' && (
-          <AccountList onSelect={() => setActiveTab('Transactions')} />
+          <AccountList onSelect={openOperations} refresh={refresh} />
         )}
         {activeTab === 'Operations' && (
           <>
-            <LedgerOperations onDone={bump} />
+            <LedgerOperations onDone={bump} initialAccountId={selectedAccountId} />
             <TransactionForm onCreated={bump} />
           </>
         )}
@@ -43,7 +48,7 @@ function Dashboard() {
 
 function AppInner() {
   const { user, loading } = useAuth();
-  if (loading) return <div style={s.loading}>Loading…</div>;
+  if (loading) return <div className="loading-state">Loading your workspace…</div>;
   return user ? <Dashboard /> : <AuthPage />;
 }
 
@@ -55,9 +60,3 @@ export default function App() {
     </AuthProvider>
   );
 }
-
-const s = {
-  app:     { minHeight: '100vh', background: '#f8fafc' },
-  main:    { maxWidth: 1200, margin: '0 auto', padding: '32px 24px' },
-  loading: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 18 },
-};

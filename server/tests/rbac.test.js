@@ -11,6 +11,21 @@ async function registerAs(role, suffix = Date.now()) {
 }
 
 describe('RBAC — Role-Based Access Control', () => {
+  it('keeps audit records append-only', async () => {
+    await registerAs('ACCOUNT_HOLDER', 'immutable-audit');
+    const { rows } = await pool.query('SELECT id FROM audit_logs LIMIT 1');
+    expect(rows).toHaveLength(1);
+    await expect(
+      pool.query("UPDATE audit_logs SET action = 'TAMPERED' WHERE id = $1", [rows[0].id])
+    ).rejects.toThrow('audit_logs is append-only');
+    await expect(
+      pool.query('DELETE FROM audit_logs WHERE id = $1', [rows[0].id])
+    ).rejects.toThrow('audit_logs is append-only');
+    await expect(
+      pool.query('TRUNCATE TABLE audit_logs')
+    ).rejects.toThrow('audit_logs is append-only');
+  });
+
   it('AUDITOR cannot deposit', async () => {
     const { token: auditorToken } = await registerAs('AUDITOR', 'aud1');
     const { token: holderToken } = await registerAs('ACCOUNT_HOLDER', 'aud1-holder');

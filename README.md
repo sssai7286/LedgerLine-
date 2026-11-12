@@ -4,11 +4,14 @@ LedgerLine is a PERN (PostgreSQL, Express, React, Node.js) financial ledger for 
 
 ## Features
 
-- JWT authentication and role-based access for account holders, admins, and auditors.
-- Account creation, deposits, withdrawals, and transfers.
-- Atomic PostgreSQL transactions, idempotency keys, and concurrent overdraft protection.
-- Balanced journal entries for all money movements, including external clearing legs for deposits and withdrawals.
-- Audit history and OpenAPI documentation.
+- JWT authentication and server-enforced role-based access for account holders, admins, and auditors.
+- Account creation, balance checks, account statements, deposits, withdrawals, and same-currency transfers.
+- Balanced double-entry journal entries and database checks that reject unbalanced transactions.
+- Atomic PostgreSQL transactions, idempotency keys, row locking, and server-side overdraft protection.
+- Append-only audit records enforced by database triggers and available to admins and auditors.
+- Responsive React dashboard, currency dropdowns, transaction search and type filters, and API-backed operation forms.
+- Automated authentication, authorization, account ownership, transaction, idempotency, and concurrency tests.
+- Docker Compose deployment, seeded demo users/accounts, and interactive OpenAPI documentation.
 
 ## Requirements
 
@@ -83,6 +86,10 @@ All protected routes use `Authorization: Bearer <token>`.
 Interactive API documentation is available at `http://localhost:5000/api/docs`.
 
 All amounts are integer cents. Positive journal amounts are debits; negative amounts are credits. Each transaction's entries sum to zero. Account balances exclude external clearing entries.
+
+On the dashboard, use **Statement** on an account card to view that account's ledger activity. The Operations screen filters available accounts to the selected currency; transfers require both accounts to use the same currency.
+
+The repository does not currently include a recorded demo video.
 
 ## Tests
 

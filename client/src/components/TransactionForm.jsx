@@ -1,159 +1,204 @@
 import React, { useEffect, useState } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { createTransaction, fetchAccounts, getErrorMessage } from '../api/api';
 
 const emptyEntry = () => ({ account_id: '', amount: '' });
+const emptyForm = () => ({ idempotency_key: `journal-${uuidv4()}`, description: '' });
 
 export default function TransactionForm({ onCreated }) {
   const [accounts, setAccounts] = useState([]);
-  const [form, setForm]     = useState({ idempotency_key: '', description: '' });
+  const [form, setForm] = useState(emptyForm);
   const [entries, setEntries] = useState([emptyEntry(), emptyEntry()]);
-  const [error, setError]   = useState('');
+  const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const net = entries.reduce((sum, entry) => sum + (entry.amount === '' ? 0 : Number(entry.amount)), 0);
+  const hasValidAmounts = entries.every((entry) =>
+    Number.isSafeInteger(Number(entry.amount)) && Number(entry.amount) !== 0
+  );
+  const hasAllAccounts = entries.every((entry) => Boolean(entry.account_id));
+  const canSubmit = hasValidAmounts && hasAllAccounts && Number.isSafeInteger(net) && net === 0;
+  const selectedCurrency = entries
+    .map((entry) => accounts.find((account) => account.id === entry.account_id)?.currency)
+    .find(Boolean);
 
   useEffect(() => {
     fetchAccounts()
       .then(setAccounts)
-      .catch((err) => setError(getErrorMessage(err)));
+      .catch((err) => setError(getErrorMessage(err)))
+      .finally(() => setLoading(false));
   }, []);
 
-  const updateEntry = (i, field, value) => {
-    const next = [...entries];
-    next[i] = { ...next[i], [field]: value };
-    setEntries(next);
+  const updateEntry = (index, field, value) => {
+    const account = field === 'account_id' ? accounts.find((item) => item.id === value) : null;
+    setEntries((current) => current.map((entry, entryIndex) => {
+      if (entryIndex === index) return { ...entry, [field]: value };
+      if (index === 0 && account
+        && accounts.find((item) => item.id === entry.account_id)?.currency !== account.currency) {
+        return { ...entry, account_id: '' };
+      }
+      return entry;
+    }));
+    setError('');
+    setSuccess('');
   };
 
-  const addEntry = () => setEntries([...entries, emptyEntry()]);
-  const removeEntry = (i) => setEntries(entries.filter((_, idx) => idx !== i));
+  const addEntry = () => setEntries((current) => [...current, emptyEntry()]);
+  const removeEntry = (index) => setEntries((current) => current.filter((_, entryIndex) => entryIndex !== index));
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setError('');
     setSuccess('');
 
-    if (entries.some((entry) => !Number.isSafeInteger(Number(entry.amount)) || Number(entry.amount) === 0)) {
-      setError('Each journal entry must be a non-zero integer amount in cents');
+    if (!hasAllAccounts || !hasValidAmounts) {
+      setError('Choose an account and enter a non-zero whole number of cents for every journal entry.');
+      return;
+    }
+    if (new Set(entries.map((entry) => entry.account_id)).size !== entries.length) {
+      setError('Each account can only appear once in a journal transaction.');
       return;
     }
     if (!Number.isSafeInteger(net) || net !== 0) {
-      setError(`Net amount is ${net} cents — must be 0 for a balanced transaction`);
+      setError(`Journal entries are out of balance by ${net} cents. The net must equal 0.`);
       return;
     }
 
+    setSaving(true);
     try {
-      const payload = {
+      await createTransaction({
         ...form,
-        entries: entries.map((en) => ({
-          account_id: en.account_id,
-          amount: parseInt(en.amount),
+        entries: entries.map((entry) => ({
+          account_id: entry.account_id,
+          amount: Number(entry.amount),
         })),
-      };
-      await createTransaction(payload);
-      setSuccess('Transaction created successfully!');
-      setForm({ idempotency_key: '', description: '' });
+      });
+      setSuccess('Balanced journal transaction posted successfully.');
+      setForm(emptyForm());
       setEntries([emptyEntry(), emptyEntry()]);
-      if (onCreated) onCreated();
+      onCreated?.();
     } catch (err) {
       setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
     }
   };
 
+  const availableAccounts = (entryIndex) => {
+    const alreadySelected = new Set(entries
+      .filter((_, index) => index !== entryIndex)
+      .map((entry) => entry.account_id)
+      .filter(Boolean));
+    const currentAccountId = entries[entryIndex].account_id;
+    return accounts.filter((account) =>
+      (!selectedCurrency || account.currency === selectedCurrency)
+      && (!alreadySelected.has(account.id) || account.id === currentAccountId)
+    );
+  };
+
   return (
-    <section style={styles.section}>
-      <h2>New Transaction</h2>
-
-      <form onSubmit={handleSubmit}>
-        <div style={styles.row}>
-          <input
-            placeholder="Idempotency key (e.g. inv-001-2026)"
-            value={form.idempotency_key}
-            onChange={(e) => setForm({ ...form, idempotency_key: e.target.value })}
-            required
-            style={{ ...styles.input, flex: 2 }}
-            aria-label="Idempotency key"
-          />
-          <input
-            placeholder="Description (optional)"
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-            style={{ ...styles.input, flex: 3 }}
-            aria-label="Description"
-          />
+    <section className="panel journal-panel">
+      <div className="section-heading">
+        <div>
+          <h2 className="section-title">Journal entry</h2>
+          <p className="section-description">Record a balanced multi-account transaction.</p>
         </div>
+      </div>
 
-        <h3 style={{ marginBottom: 6 }}>Journal Entries</h3>
-        <p style={styles.hint}>
-          Enter amounts in <strong>cents</strong> (e.g. $10.00 = 1000).
-          Positive = debit, negative = credit. Net must equal <strong>0</strong>.
-        </p>
-
-        {entries.map((en, i) => (
-          <div key={i} style={styles.row}>
-            <select
-              value={en.account_id}
-              onChange={(e) => updateEntry(i, 'account_id', e.target.value)}
-              required
-              style={{ ...styles.input, flex: 3 }}
-              aria-label={`Entry ${i + 1} account`}
-            >
-              <option value="">Select account</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.account_name} ({account.currency})
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              step="1"
-              placeholder="Amount (cents)"
-              value={en.amount}
-              onChange={(e) => updateEntry(i, 'amount', e.target.value)}
-              required
-              style={{ ...styles.input, flex: 1 }}
-              aria-label={`Entry ${i + 1} amount`}
-            />
-            {entries.length > 2 && (
-              <button
-                type="button"
-                onClick={() => removeEntry(i)}
-                style={styles.removeBtn}
-                aria-label={`Remove entry ${i + 1}`}
-              >✕</button>
-            )}
+      {error && <p role="alert" className="form-error" style={{ marginBottom: 15 }}>{error}</p>}
+      {success && <p role="status" className="form-success" style={{ marginBottom: 15 }}>{success}</p>}
+      {loading ? <div className="loading-state">Loading accounts…</div> : accounts.length < 2 ? (
+        <div className="empty-state">Create at least two accounts in the same currency to post a journal entry.</div>
+      ) : (
+        <form onSubmit={handleSubmit}>
+          <div className="operation-form" style={{ maxWidth: 'none' }}>
+            <label className="form-field">
+              <span className="form-label">Idempotency key</span>
+              <input
+                className="field"
+                value={form.idempotency_key}
+                onChange={(event) => setForm({ ...form, idempotency_key: event.target.value })}
+                maxLength={255}
+                required
+                aria-label="Idempotency key"
+              />
+              <span className="form-hint">Keep this key if retrying a request to avoid duplicate postings.</span>
+            </label>
+            <label className="form-field">
+              <span className="form-label">Description <span className="form-hint">(optional)</span></span>
+              <input
+                className="field"
+                placeholder="What is this journal entry for?"
+                value={form.description}
+                onChange={(event) => setForm({ ...form, description: event.target.value })}
+                maxLength={500}
+                aria-label="Description"
+              />
+            </label>
           </div>
-        ))}
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-          <button type="button" onClick={addEntry} style={styles.ghostBtn}>
-            + Add Entry
+          <div style={{ margin: '22px 0 12px' }}>
+            <h3 className="section-title" style={{ fontSize: 16 }}>Entries</h3>
+            <p className="section-description">
+              Enter whole cents. Positive amounts debit; negative amounts credit. All accounts must share a currency.
+            </p>
+          </div>
+
+          {entries.map((entry, index) => (
+            <div className="journal-row" key={index}>
+              <select
+                className="select-field"
+                value={entry.account_id}
+                onChange={(event) => updateEntry(index, 'account_id', event.target.value)}
+                required
+                aria-label={`Entry ${index + 1} account`}
+              >
+                <option value="">{availableAccounts(index).length ? 'Choose account' : 'No compatible account'}</option>
+                {availableAccounts(index).map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.account_name} · {account.currency}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="field"
+                type="number"
+                step="1"
+                placeholder="Amount (cents)"
+                value={entry.amount}
+                onChange={(event) => updateEntry(index, 'amount', event.target.value)}
+                required
+                aria-label={`Entry ${index + 1} amount in cents`}
+              />
+              {entries.length > 2 && (
+                <button
+                  type="button"
+                  className="button button-danger button-small"
+                  onClick={() => removeEntry(index)}
+                  aria-label={`Remove entry ${index + 1}`}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          ))}
+
+          <div className="journal-actions">
+            <button type="button" className="button button-secondary button-small" onClick={addEntry}>
+              + Add entry
+            </button>
+            <span className={`balance-badge ${canSubmit ? 'balance-good' : 'balance-bad'}`} aria-live="polite">
+              {canSubmit ? 'Balanced · 0 cents' : `Net: ${Number.isSafeInteger(net) ? net : 'out of range'} cents`}
+            </span>
+          </div>
+
+          <button type="submit" className="button button-primary" disabled={!canSubmit || saving}>
+            {saving ? 'Posting securely…' : 'Post journal transaction'}
           </button>
-          <span style={{ ...styles.netBadge, background: net === 0 ? '#16a34a' : '#dc2626' }}>
-            Net: {net} cents {net === 0 ? '✓ Balanced' : '✗ Unbalanced'}
-          </span>
-        </div>
-
-        <button type="submit" style={styles.btn} disabled={net !== 0}>
-          Submit Transaction
-        </button>
-      </form>
-
-      {error   && <p role="alert" style={styles.error}>{error}</p>}
-      {success && <p role="status" style={styles.success}>{success}</p>}
+        </form>
+      )}
     </section>
   );
 }
-
-const styles = {
-  section:   { marginBottom: 40 },
-  row:       { display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
-  input:     { padding: '6px 10px', borderRadius: 4, border: '1px solid #ccc' },
-  btn:       { padding: '8px 20px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' },
-  ghostBtn:  { padding: '6px 14px', background: 'transparent', border: '1px solid #2563eb', color: '#2563eb', borderRadius: 4, cursor: 'pointer' },
-  removeBtn: { padding: '6px 10px', background: '#fee2e2', border: 'none', color: '#dc2626', borderRadius: 4, cursor: 'pointer' },
-  hint:      { fontSize: 13, color: '#6b7280', marginBottom: 8 },
-  netBadge:  { color: '#fff', borderRadius: 12, padding: '4px 12px', fontSize: 13 },
-  error:     { color: '#dc2626', marginTop: 8 },
-  success:   { color: '#16a34a', marginTop: 8 },
-};
