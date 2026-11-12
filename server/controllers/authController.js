@@ -81,7 +81,7 @@ const login = async (req, res) => {
     const validPassword = user && await bcrypt.compare(password, user.password);
     const matchesLoginType = !loginType
       || (loginType === 'user' && user?.role === 'ACCOUNT_HOLDER')
-      || (loginType === 'admin' && user?.role === 'ADMIN')
+      || (loginType === 'admin' && ['ADMIN', 'AUDITOR'].includes(user?.role))
       || (loginType === 'auditor' && user?.role === 'AUDITOR');
 
     if (!validPassword || !matchesLoginType) {

@@ -53,14 +53,14 @@ describe('Authentication', () => {
       expect(res.body.token).toBeDefined();
     });
 
-    it('rejects account holders selecting admin or auditor login', async () => {
+    it('rejects account holders selecting staff login', async () => {
       const res = await request(app).post('/api/auth/login')
         .send({ email: user.email, password: user.password, login_type: 'admin' });
       expect(res.status).toBe(401);
       expect(res.body.error).toMatch(/invalid email or password/i);
     });
 
-    it('allows admins and auditors only through their matching login choice', async () => {
+    it('allows both admins and auditors through the combined staff login', async () => {
       const { pool } = require('../config/db');
       for (const role of ['ADMIN', 'AUDITOR']) {
         const email = `${role.toLowerCase()}-staff@ledger.com`;
@@ -68,16 +68,10 @@ describe('Authentication', () => {
           .send({ ...user, email });
         await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, registered.body.user.id]);
 
-        const matchingLoginType = role.toLowerCase();
-        const matchingLogin = await request(app).post('/api/auth/login')
-          .send({ email, password: user.password, login_type: matchingLoginType });
-        expect(matchingLogin.status).toBe(200);
-        expect(matchingLogin.body.user.role).toBe(role);
-
-        const otherStaffLoginType = role === 'ADMIN' ? 'auditor' : 'admin';
-        const mismatchedLogin = await request(app).post('/api/auth/login')
-          .send({ email, password: user.password, login_type: otherStaffLoginType });
-        expect(mismatchedLogin.status).toBe(401);
+        const staffLogin = await request(app).post('/api/auth/login')
+          .send({ email, password: user.password, login_type: 'admin' });
+        expect(staffLogin.status).toBe(200);
+        expect(staffLogin.body.user.role).toBe(role);
       }
     });
 

@@ -61,7 +61,7 @@ LedgerLine is a PERN (PostgreSQL, Express, React, Node.js) financial ledger for 
 
    **Warning:** seeding truncates existing application data. Demo users share the password `password123`; change it after local testing.
 
-The React app runs at `http://localhost:3000`; the API runs at `http://localhost:5000`. Registration creates account-holder users only. At sign-in, choose **User login**, **Admin login**, or **Auditor login**. The API checks that the selected login type matches the account's assigned role; choosing a login type does not grant that role.
+The React app runs at `http://localhost:3000`; the API runs at `http://localhost:5000`. Registration creates account-holder users only. At sign-in, choose **User login** or **Admin / Auditor login** for staff accounts. The API still enforces each account's assigned role, so using the combined staff login does not grant admin permissions to auditors.
 
 ## API
 
