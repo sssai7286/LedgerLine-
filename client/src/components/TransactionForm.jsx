@@ -1,16 +1,22 @@
-import React, { useState } from 'react';
-import { createTransaction } from '../api/api';
+import React, { useEffect, useState } from 'react';
+import { createTransaction, fetchAccounts, getErrorMessage } from '../api/api';
 
 const emptyEntry = () => ({ account_id: '', amount: '' });
 
 export default function TransactionForm({ onCreated }) {
+  const [accounts, setAccounts] = useState([]);
   const [form, setForm]     = useState({ idempotency_key: '', description: '' });
   const [entries, setEntries] = useState([emptyEntry(), emptyEntry()]);
   const [error, setError]   = useState('');
   const [success, setSuccess] = useState('');
 
-  // Compute net to show live balance feedback
-  const net = entries.reduce((s, e) => s + (parseInt(e.amount) || 0), 0);
+  const net = entries.reduce((sum, entry) => sum + (entry.amount === '' ? 0 : Number(entry.amount)), 0);
+
+  useEffect(() => {
+    fetchAccounts()
+      .then(setAccounts)
+      .catch((err) => setError(getErrorMessage(err)));
+  }, []);
 
   const updateEntry = (i, field, value) => {
     const next = [...entries];
@@ -26,7 +32,11 @@ export default function TransactionForm({ onCreated }) {
     setError('');
     setSuccess('');
 
-    if (net !== 0) {
+    if (entries.some((entry) => !Number.isSafeInteger(Number(entry.amount)) || Number(entry.amount) === 0)) {
+      setError('Each journal entry must be a non-zero integer amount in cents');
+      return;
+    }
+    if (!Number.isSafeInteger(net) || net !== 0) {
       setError(`Net amount is ${net} cents — must be 0 for a balanced transaction`);
       return;
     }
@@ -45,7 +55,7 @@ export default function TransactionForm({ onCreated }) {
       setEntries([emptyEntry(), emptyEntry()]);
       if (onCreated) onCreated();
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to create transaction');
+      setError(getErrorMessage(err));
     }
   };
 
@@ -80,16 +90,23 @@ export default function TransactionForm({ onCreated }) {
 
         {entries.map((en, i) => (
           <div key={i} style={styles.row}>
-            <input
-              placeholder="Account ID (UUID)"
+            <select
               value={en.account_id}
               onChange={(e) => updateEntry(i, 'account_id', e.target.value)}
               required
-              style={{ ...styles.input, flex: 3, fontFamily: 'monospace' }}
-              aria-label={`Entry ${i + 1} account ID`}
-            />
+              style={{ ...styles.input, flex: 3 }}
+              aria-label={`Entry ${i + 1} account`}
+            >
+              <option value="">Select account</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.account_name} ({account.currency})
+                </option>
+              ))}
+            </select>
             <input
               type="number"
+              step="1"
               placeholder="Amount (cents)"
               value={en.amount}
               onChange={(e) => updateEntry(i, 'amount', e.target.value)}

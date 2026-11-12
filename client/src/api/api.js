@@ -15,7 +15,7 @@ http.interceptors.response.use(
   (err) => {
     // Network error — backend is down / unreachable
     if (!err.response) {
-      err.userMessage = 'Cannot reach the server. Make sure the backend is running on port 5000 and MongoDB is connected.';
+      err.userMessage = 'Cannot reach the server. Make sure the backend is running on port 5000 and PostgreSQL is connected.';
       return Promise.reject(err);
     }
 
@@ -58,6 +58,7 @@ export const withdraw = (d) => http.post('/ledger/withdraw', d).then((r) => r.da
 export const transfer = (d) => http.post('/ledger/transfer', d).then((r) => r.data);
 
 // ── Transactions ──────────────────────────────────────────────────
+export const createTransaction       = (d)  => http.post('/transactions', d).then((r) => r.data);
 export const fetchTransactions       = ()   => http.get('/transactions').then((r) => r.data);
 export const fetchTransactionEntries = (id) => http.get(`/transactions/${id}/entries`).then((r) => r.data);
 

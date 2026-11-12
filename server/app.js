@@ -3,6 +3,7 @@ const express   = require('express');
 const cors      = require('cors');
 const helmet    = require('helmet');
 const rateLimit = require('express-rate-limit');
+const path      = require('path');
 
 const authRoutes        = require('./routes/authRoutes');
 const accountRoutes     = require('./routes/accountRoutes');
@@ -13,6 +14,8 @@ const auditRoutes       = require('./routes/auditRoutes');
 // Swagger
 const swaggerUi   = require('swagger-ui-express');
 const swaggerSpec = require('./docs/swagger');
+const { pool }    = require('./config/db');
+const { asyncHandler } = require('./middleware/auth');
 
 const app = express();
 
@@ -40,16 +43,30 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/audit',        auditRoutes);
 
 // ── Health ────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) =>
-  res.json({ status: 'ok', db: 'mongodb', timestamp: new Date().toISOString() })
-);
+app.get('/api/health', asyncHandler(async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', db: 'postgresql', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Database health check failed:', err.message);
+    res.status(503).json({ status: 'error', db: 'postgresql', timestamp: new Date().toISOString() });
+  }
+}));
+
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, 'public')));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  });
+}
 
 // ── 404 ───────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 
 // ── Error handler ─────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Unhandled API error:', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 

@@ -64,7 +64,7 @@ describe('Account Management', () => {
         .send({ account_name: 'Checking', currency: 'USD' });
 
       const res = await request(app)
-        .get(`/api/accounts/${acct.body._id}/balance`)
+        .get(`/api/accounts/${acct.body.id}/balance`)
         .set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(200);
       expect(res.body.balance_cents).toBe(0);
@@ -79,7 +79,7 @@ describe('Account Management', () => {
         .send({ account_name: 'Private', currency: 'USD' });
 
       const res = await request(app)
-        .get(`/api/accounts/${acct.body._id}/balance`)
+        .get(`/api/accounts/${acct.body.id}/balance`)
         .set('Authorization', `Bearer ${t2}`);
       expect(res.status).toBe(403);
     });

@@ -65,7 +65,7 @@ export default function AuditLogViewer() {
           </thead>
           <tbody>
             {logs.map((l) => (
-              <tr key={l._id} style={{ background: l.status === 'FAILURE' ? '#fff1f2' : 'transparent' }}>
+              <tr key={l.id} style={{ background: l.status === 'FAILURE' ? '#fff1f2' : 'transparent' }}>
                 <td style={s.td}>{new Date(l.created_at).toLocaleString()}</td>
                 <td style={{ ...s.td, fontSize: 12 }}>{l.user_email || '—'}</td>
                 <td style={s.td}><span style={s.badge}>{l.role || '—'}</span></td>

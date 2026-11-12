@@ -7,15 +7,15 @@ const {
   getAccountBalance,
   getStatement,
 } = require('../controllers/accountController');
-const { protect, authorize } = require('../middleware/auth');
+const { protect, authorize, asyncHandler } = require('../middleware/auth');
 
 // All account routes require authentication
 router.use(protect);
 
-router.get('/',                getAllAccounts);
-router.post('/',               authorize('ADMIN', 'ACCOUNT_HOLDER'), createAccount);
-router.get('/:id',             getAccount);
-router.get('/:id/balance',     getAccountBalance);
-router.get('/:id/statement',   getStatement);
+router.get('/',                asyncHandler(getAllAccounts));
+router.post('/',               authorize('ADMIN', 'ACCOUNT_HOLDER'), asyncHandler(createAccount));
+router.get('/:id',             asyncHandler(getAccount));
+router.get('/:id/balance',     asyncHandler(getAccountBalance));
+router.get('/:id/statement',   asyncHandler(getStatement));
 
 module.exports = router;

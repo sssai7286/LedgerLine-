@@ -50,7 +50,7 @@ Retrying with the same key returns the original transaction — money is never d
         Account: {
           type: 'object',
           properties: {
-            _id:           { type: 'string' },
+            id:             { type: 'string', format: 'uuid' },
             account_name:  { type: 'string', example: 'Main Checking' },
             account_type:  { type: 'string', enum: ['ASSET','LIABILITY','EQUITY','INCOME','EXPENSE'] },
             currency:      { type: 'string', example: 'USD' },
@@ -61,7 +61,7 @@ Retrying with the same key returns the original transaction — money is never d
         Transaction: {
           type: 'object',
           properties: {
-            _id:             { type: 'string' },
+            id:               { type: 'string', format: 'uuid' },
             type:            { type: 'string', enum: ['DEPOSIT','WITHDRAWAL','TRANSFER'] },
             idempotency_key: { type: 'string', example: 'dep-user123-1720000000' },
             description:     { type: 'string', example: 'Monthly savings deposit' },
@@ -74,9 +74,9 @@ Retrying with the same key returns the original transaction — money is never d
         JournalEntry: {
           type: 'object',
           properties: {
-            _id:            { type: 'string' },
+            id:              { type: 'string', format: 'uuid' },
             transaction_id: { type: 'string' },
-            account_id:     { type: 'string' },
+            account_id:     { type: 'string', nullable: true, description: 'Null for external clearing entries' },
             amount:         { type: 'integer', example: -5000, description: 'Positive=Debit, Negative=Credit' },
             created_at:     { type: 'string', format: 'date-time' },
           },
@@ -105,7 +105,6 @@ Retrying with the same key returns the original transaction — money is never d
               name:     { type: 'string', example: 'Alice Smith' },
               email:    { type: 'string', example: 'alice@example.com' },
               password: { type: 'string', example: 'securepassword123' },
-              role:     { type: 'string', enum: ['ACCOUNT_HOLDER','AUDITOR','ADMIN'], default: 'ACCOUNT_HOLDER' },
             },
           }}}},
           responses: {
@@ -198,6 +197,34 @@ Retrying with the same key returns the original transaction — money is never d
         },
       },
       '/api/transactions': {
+        post: {
+          tags: ['Transactions'], summary: 'Post a balanced journal transaction',
+          requestBody: { required: true, content: { 'application/json': { schema: {
+            type: 'object',
+            required: ['idempotency_key', 'entries'],
+            properties: {
+              idempotency_key: { type: 'string', maxLength: 255 },
+              description: { type: 'string' },
+              entries: {
+                type: 'array',
+                minItems: 2,
+                items: {
+                  type: 'object',
+                  required: ['account_id', 'amount'],
+                  properties: {
+                    account_id: { type: 'string', format: 'uuid' },
+                    amount: { type: 'integer', description: 'Positive=debit, negative=credit' },
+                  },
+                },
+              },
+            },
+          }}}},
+          responses: {
+            201: { description: 'Balanced transaction posted' },
+            400: { description: 'Validation or balance error' },
+            403: { description: 'Account access denied' },
+          },
+        },
         get: {
           tags: ['Transactions'], summary: 'List transactions (own for ACCOUNT_HOLDER, all for ADMIN/AUDITOR)',
           responses: { 200: { description: 'List of transactions', content: { 'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/Transaction' } } } } } },

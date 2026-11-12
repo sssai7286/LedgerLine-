@@ -1,66 +1,77 @@
-const jwt      = require('jsonwebtoken');
-const User     = require('../models/User');
-const AuditLog = require('../models/AuditLog');
+const jwt = require('jsonwebtoken');
+const { pool } = require('../config/db');
 
-/**
- * protect — verifies JWT and attaches req.user
- */
+const asyncHandler = (handler) => (req, res, next) => {
+  Promise.resolve(handler(req, res, next)).catch(next);
+};
+const isUuid = (value) => typeof value === 'string'
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
 const protect = async (req, res, next) => {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'No token provided' });
   }
 
-  const token = header.split(' ')[1];
+  let decoded;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('-password');
-    if (!user || !user.is_active) {
-      return res.status(401).json({ error: 'User not found or inactive' });
-    }
-    req.user = user;
-    next();
+    decoded = jwt.verify(header.slice(7), process.env.JWT_SECRET);
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+  if (!isUuid(decoded.id)) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, name, email, role FROM users WHERE id = $1 AND is_active = TRUE',
+      [decoded.id]
+    );
+    if (!rows[0]) {
+      return res.status(401).json({ error: 'User not found or inactive' });
+    }
+
+    req.user = rows[0];
+    return next();
+  } catch (err) {
+    return next(err);
+  }
 };
 
-/**
- * authorize(...roles) — restricts route to specific roles
- * Usage: router.get('/admin', protect, authorize('ADMIN'), handler)
- */
 const authorize = (...roles) => (req, res, next) => {
-  if (!roles.includes(req.user.role)) {
+  if (!req.user || !roles.includes(req.user.role)) {
     return res.status(403).json({
       error: `Access denied. Required role: ${roles.join(' or ')}`,
     });
   }
-  next();
+  return next();
 };
 
-/**
- * auditAction(action, resource?) — logs every request to AuditLog
- * Call AFTER protect so req.user is available.
- */
 const auditAction = (action, resource = null) => async (req, res, next) => {
-  // Run after response to capture status
   const originalJson = res.json.bind(res);
   res.json = function (body) {
     const status = res.statusCode < 400 ? 'SUCCESS' : 'FAILURE';
-    AuditLog.create({
-      user_id:     req.user?._id   || null,
-      user_email:  req.user?.email || null,
-      role:        req.user?.role  || null,
-      action,
-      resource,
-      resource_id: body?._id || body?.transaction?._id || req.params?.id || null,
-      meta:        { body: req.body, params: req.params },
-      ip:          req.ip,
-      status,
-    }).catch((e) => console.error('AuditLog write failed:', e.message));
+    const resourceId = body?.id || body?.transaction?.id || req.params?.id || null;
+    pool.query(
+      `INSERT INTO audit_logs
+         (user_id, user_email, role, action, resource, resource_id, meta, ip, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        req.user?.id || null,
+        req.user?.email || null,
+        req.user?.role || null,
+        action,
+        resource,
+        resourceId,
+        JSON.stringify({ body: req.body, params: req.params }),
+        req.ip,
+        status,
+      ]
+    ).catch((err) => console.error('Audit log write failed:', err.message));
     return originalJson(body);
   };
-  next();
+  return next();
 };
 
-module.exports = { protect, authorize, auditAction };
+module.exports = { protect, authorize, auditAction, asyncHandler };

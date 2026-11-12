@@ -1,135 +1,106 @@
-# LedgerLine – Financial Ledger System
+# LedgerLine
 
-A MERN stack application implementing **double-entry bookkeeping** for financial integrity.
+LedgerLine is a PERN (PostgreSQL, Express, React, Node.js) financial ledger for double-entry bookkeeping.
 
-## Tech Stack
+## Features
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | React 18 |
-| Backend | Node.js + Express |
-| Database | **MongoDB** + Mongoose |
-| HTTP client | Axios |
+- JWT authentication and role-based access for account holders, admins, and auditors.
+- Account creation, deposits, withdrawals, and transfers.
+- Atomic PostgreSQL transactions, idempotency keys, and concurrent overdraft protection.
+- Balanced journal entries for all money movements, including external clearing legs for deposits and withdrawals.
+- Audit history and OpenAPI documentation.
 
-## Double-Entry Bookkeeping
+## Requirements
 
-Every transaction creates two or more journal entries where:
-- `SUM(entries.amount) = 0` — debits always equal credits
-- `amount > 0` = **debit** (value flows into the account)
-- `amount < 0` = **credit** (value flows out of the account)
-- Amounts stored as **integers (cents)** to avoid floating-point errors
-- All writes are wrapped in a **MongoDB session** (atomic — all or nothing)
+- Node.js 18 or later
+- PostgreSQL 14 or later
 
-## Project Structure
+## Local setup
 
-```
-snovyasis/
-├── server/
-│   ├── config/db.js               # Mongoose connection
-│   ├── models/
-│   │   ├── Account.js             # accounts collection
-│   │   ├── Transaction.js         # transactions collection
-│   │   └── JournalEntry.js        # journalentries collection
-│   ├── controllers/
-│   │   ├── accountController.js
-│   │   └── transactionController.js
-│   ├── routes/
-│   │   ├── accountRoutes.js
-│   │   └── transactionRoutes.js
-│   ├── db/README.md               # DB layer docs
-│   └── index.js
-├── client/
-│   └── src/
-│       ├── components/
-│       │   ├── AccountList.jsx
-│       │   ├── TransactionForm.jsx
-│       │   └── JournalEntries.jsx
-│       ├── api/api.js
-│       ├── App.jsx
-│       └── index.js
-├── .env.example
-├── .gitignore
-└── README.md
-```
+1. Create a PostgreSQL user and the application databases:
 
-## Getting Started
-
-### Prerequisites
-- Node.js >= 18
-- MongoDB >= 6 (local) **or** a free [MongoDB Atlas](https://www.mongodb.com/atlas) cluster
-
-### Setup
-
-1. Clone the repo
-2. Copy `.env.example` → `.env` and set `MONGO_URI`
-3. Install server dependencies:
-   ```bash
-   cd server && npm install
-   ```
-4. Install client dependencies:
-   ```bash
-   cd ../client && npm install
-   ```
-5. Start the backend:
-   ```bash
-   cd server && npm run dev
-   ```
-6. Start the frontend:
-   ```bash
-   cd client && npm start
+   ```sql
+   CREATE USER ledgerline WITH PASSWORD 'ledgerline';
+   CREATE DATABASE ledgerline OWNER ledgerline;
+   CREATE DATABASE ledgerline_test OWNER ledgerline;
    ```
 
-## API Endpoints
+2. If `.env` does not exist, copy `.env.example` to `.env`. Otherwise, add `DATABASE_URL`, `DATABASE_TEST_URL`, and `DATABASE_SSL` from the example without replacing your existing `JWT_SECRET`. Keep the test URL pointed at a dedicated database.
+3. Install dependencies:
 
-| Method | Route | Description |
-|--------|-------|-------------|
-| GET | `/api/accounts` | List all accounts |
-| POST | `/api/accounts` | Create account |
-| GET | `/api/accounts/:id/balance` | Get account balance (cents) |
-| POST | `/api/transactions` | Create a balanced transaction |
-| GET | `/api/transactions` | List all transactions |
-| GET | `/api/transactions/:id/entries` | Get journal entries for a transaction |
+   ```powershell
+   Set-Location server
+   npm install
+   Set-Location ..\client
+   npm install
+   ```
 
-### POST /api/transactions — example payload
+4. Start the API (it creates or updates the database schema on startup):
 
-```json
-{
-  "idempotency_key": "inv-vendor-001",
-  "description": "Pay vendor invoice #001",
-  "entries": [
-    { "account_id": "<cash_account_id>",    "amount": -10000 },
-    { "account_id": "<expense_account_id>", "amount":  10000 }
-  ]
-}
+   ```powershell
+   Set-Location server
+   npm run dev
+   ```
+
+5. In another terminal, start React:
+
+   ```powershell
+   Set-Location client
+   npm start
+   ```
+
+6. Optionally add demo users and accounts:
+
+   ```powershell
+   Set-Location server
+   npm run seed
+   ```
+
+   **Warning:** seeding truncates existing application data. Demo users share the password `password123`; change it after local testing.
+
+The React app runs at `http://localhost:3000`; the API runs at `http://localhost:5000`. Registration creates account-holder users; privileged users are created by the seed script or an administrator.
+
+## API
+
+All protected routes use `Authorization: Bearer <token>`.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/auth/register` | Register an account holder |
+| POST | `/api/auth/login` | Sign in |
+| GET | `/api/auth/me` | Get the current user |
+| GET, POST | `/api/accounts` | List or create accounts |
+| GET | `/api/accounts/:id/balance` | Read a balance and verify it against journal entries |
+| GET | `/api/accounts/:id/statement` | Read an account statement |
+| POST | `/api/ledger/deposit` | Deposit funds |
+| POST | `/api/ledger/withdraw` | Withdraw funds |
+| POST | `/api/ledger/transfer` | Transfer between accounts |
+| GET, POST | `/api/transactions` | List transactions or post balanced journal entries |
+| GET | `/api/transactions/:id/entries` | Read a transaction and its entries |
+| GET | `/api/audit` | Read audit logs (admin/auditor only) |
+| GET | `/api/health` | Check API and database connectivity |
+
+Interactive API documentation is available at `http://localhost:5000/api/docs`.
+
+All amounts are integer cents. Positive journal amounts are debits; negative amounts are credits. Each transaction's entries sum to zero. Account balances exclude external clearing entries.
+
+## Tests
+
+Set `DATABASE_TEST_URL` to a dedicated test database before running:
+
+```powershell
+Set-Location server
+npm test
 ```
 
-`SUM(-10000 + 10000) = 0` → balanced ✓
+The test setup truncates tables in the configured test database.
 
-## Schema Overview
+## Docker
 
-### accounts
-| Field | Type | Notes |
-|-------|------|-------|
-| _id | ObjectId | Auto-generated |
-| owner_id | String | User reference |
-| account_name | String | e.g. "Cash", "Revenue" |
-| account_type | String | ASSET / LIABILITY / EQUITY / INCOME / EXPENSE |
-| currency | String | ISO 4217 (USD, EUR…) |
-| created_at | Date | Auto-set |
+Set `JWT_SECRET` in the environment (or root `.env`) and run:
 
-### transactions
-| Field | Type | Notes |
-|-------|------|-------|
-| _id | ObjectId | Auto-generated |
-| idempotency_key | String | Unique — prevents duplicate posts |
-| description | String | Human-readable memo |
-| created_at | Date | Auto-set |
+```powershell
+docker compose up --build
+```
 
-### journalentries
-| Field | Type | Notes |
-|-------|------|-------|
-| _id | ObjectId | Auto-generated |
-| transaction_id | ObjectId | Ref → Transaction |
-| account_id | ObjectId | Ref → Account |
-| amount | Number (int) | Cents; positive=debit, negative=credit |
-| created_at | Date | Auto-set |
+The bundled PostgreSQL database and production React/API server are available at `http://localhost:5000`.

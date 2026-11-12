@@ -11,7 +11,7 @@ async function setup(email = `tx_${Date.now()}@test.com`) {
     .set('Authorization', `Bearer ${token}`)
     .send({ account_name: 'Wallet', currency: 'USD' });
 
-  return { token, accountId: acct.body._id };
+  return { token, accountId: acct.body.id };
 }
 
 describe('Deposit', () => {
@@ -47,7 +47,7 @@ describe('Deposit', () => {
     expect(r1.status).toBe(201);
     expect(r2.status).toBe(200);
     expect(r2.body.idempotent).toBe(true);
-    expect(r1.body.transaction._id).toBe(r2.body.transaction._id);
+    expect(r1.body.transaction.id).toBe(r2.body.transaction.id);
 
     // Balance should only be incremented once
     const bal = await request(app).get(`/api/accounts/${accountId}/balance`)
@@ -93,7 +93,7 @@ describe('Transfer', () => {
     const { token, accountId: fromId } = await setup(`tr1_${Date.now()}@t.com`);
     const acct2 = await request(app).post('/api/accounts').set('Authorization', `Bearer ${token}`)
       .send({ account_name: 'Savings', currency: 'USD' });
-    const toId = acct2.body._id;
+    const toId = acct2.body.id;
 
     await request(app).post('/api/ledger/deposit').set('Authorization', `Bearer ${token}`)
       .send({ account_id: fromId, amount_cents: 20000, currency: 'USD', idempotency_key: `seed-tr1-${Date.now()}` });
@@ -121,7 +121,7 @@ describe('Transfer', () => {
 
     const res = await request(app).post('/api/ledger/transfer')
       .set('Authorization', `Bearer ${token}`)
-      .send({ from_account_id: fromId, to_account_id: acct2.body._id, amount_cents: 999, currency: 'USD', idempotency_key: `xfail-${Date.now()}` });
+      .send({ from_account_id: fromId, to_account_id: acct2.body.id, amount_cents: 999, currency: 'USD', idempotency_key: `xfail-${Date.now()}` });
     expect(res.status).toBe(400);
   });
 
@@ -131,6 +131,61 @@ describe('Transfer', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ from_account_id: accountId, to_account_id: accountId, amount_cents: 100, currency: 'USD', idempotency_key: `self-${Date.now()}` });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('Balanced journal transactions', () => {
+  it('creates balanced entries and updates both account balances', async () => {
+    const { token, accountId: cashId } = await setup(`journal_${Date.now()}@test.com`);
+    const savings = await request(app).post('/api/accounts')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ account_name: 'Savings', currency: 'USD' });
+
+    await request(app).post('/api/ledger/deposit')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        account_id: cashId,
+        amount_cents: 5000,
+        currency: 'USD',
+        idempotency_key: `journal-seed-${Date.now()}`,
+      });
+
+    const res = await request(app).post('/api/transactions')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        idempotency_key: `journal-transfer-${Date.now()}`,
+        description: 'Move funds to savings',
+        entries: [
+          { account_id: cashId, amount: -2000 },
+          { account_id: savings.body.id, amount: 2000 },
+        ],
+      });
+    expect(res.status).toBe(201);
+
+    const details = await request(app)
+      .get(`/api/transactions/${res.body.transaction.id}/entries`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(details.status).toBe(200);
+    expect(details.body.entries.reduce((sum, entry) => sum + entry.amount, 0)).toBe(0);
+
+    const [cashBalance, savingsBalance] = await Promise.all([
+      request(app).get(`/api/accounts/${cashId}/balance`).set('Authorization', `Bearer ${token}`),
+      request(app).get(`/api/accounts/${savings.body.id}/balance`).set('Authorization', `Bearer ${token}`),
+    ]);
+    expect(cashBalance.body.balance_cents).toBe(3000);
+    expect(savingsBalance.body.balance_cents).toBe(2000);
+  });
+
+  it('rejects unbalanced entries', async () => {
+    const { token, accountId } = await setup(`unbalanced_${Date.now()}@test.com`);
+    const res = await request(app).post('/api/transactions')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        idempotency_key: `unbalanced-${Date.now()}`,
+        entries: [{ account_id: accountId, amount: 100 }, { account_id: accountId, amount: -50 }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/balance/i);
   });
 });
 

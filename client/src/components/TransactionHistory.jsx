@@ -19,9 +19,9 @@ export default function TransactionHistory({ refresh }) {
 
   const loadDetail = async (tx) => {
     setDetail(null);
-    setSelected(tx._id);
+    setSelected(tx.id);
     try {
-      const d = await fetchTransactionEntries(tx._id);
+      const d = await fetchTransactionEntries(tx.id);
       setDetail(d);
     } catch { setError('Failed to load entries'); }
   };
@@ -35,9 +35,9 @@ export default function TransactionHistory({ refresh }) {
         <div style={s.list}>
           {txns.length === 0 && <p style={{ color: '#94a3b8', fontSize: 14 }}>No transactions yet</p>}
           {txns.map((tx) => (
-            <button key={tx._id} onClick={() => loadDetail(tx)}
-              style={{ ...s.txBtn, borderColor: selected === tx._id ? '#2563eb' : '#e2e8f0',
-                background: selected === tx._id ? '#eff6ff' : '#fff' }}>
+            <button key={tx.id} onClick={() => loadDetail(tx)}
+              style={{ ...s.txBtn, borderColor: selected === tx.id ? '#2563eb' : '#e2e8f0',
+                background: selected === tx.id ? '#eff6ff' : '#fff' }}>
               <div style={s.txTop}>
                 <span style={{ ...s.typeBadge, background: typeColor[tx.type] }}>{tx.type}</span>
                 <span style={s.txAmt}>{fmt(tx.amount_cents, tx.currency)}</span>
@@ -56,9 +56,9 @@ export default function TransactionHistory({ refresh }) {
                 {detail.transaction.description || '(no description)'}
               </h3>
               <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
-                ID: <span style={{ fontFamily: 'monospace' }}>{detail.transaction._id}</span>
+                ID: <span style={{ fontFamily: 'monospace' }}>{detail.transaction.id}</span>
                 &nbsp;·&nbsp;
-                By: {detail.transaction.initiated_by?.email || 'unknown'}
+                By: {detail.transaction.initiated_by_email || 'unknown'}
               </p>
 
               <table style={s.table}>
@@ -71,15 +71,15 @@ export default function TransactionHistory({ refresh }) {
                 </thead>
                 <tbody>
                   {detail.entries.map((e) => (
-                    <tr key={e._id}>
-                      <td style={s.td}>{e.account_id?.account_name || '—'}</td>
+                    <tr key={e.id}>
+                      <td style={s.td}>{e.account_name || 'External clearing'}</td>
                       <td style={{ ...s.td, color: e.amount > 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>
                         {e.amount > 0 ? 'Debit' : 'Credit'}
                       </td>
                       <td style={{ ...s.td, fontFamily: 'monospace', textAlign: 'right' }}>
-                        {fmt(Math.abs(e.amount), e.account_id?.currency || 'USD')}
+                        {fmt(Math.abs(Number(e.amount)), e.currency || detail.transaction.currency)}
                       </td>
-                      <td style={s.td}>{e.account_id?.currency || '—'}</td>
+                      <td style={s.td}>{e.currency || detail.transaction.currency}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -88,8 +88,8 @@ export default function TransactionHistory({ refresh }) {
                     <tr>
                       <td colSpan={2} style={{ ...s.td, fontWeight: 700 }}>Net (must be 0)</td>
                       <td style={{ ...s.td, fontFamily: 'monospace', textAlign: 'right', fontWeight: 700,
-                        color: detail.entries.reduce((s, e) => s + e.amount, 0) === 0 ? '#16a34a' : '#dc2626' }}>
-                        {detail.entries.reduce((s, e) => s + e.amount, 0)} cents
+                        color: detail.entries.reduce((sum, e) => sum + Number(e.amount), 0) === 0 ? '#16a34a' : '#dc2626' }}>
+                        {detail.entries.reduce((sum, e) => sum + Number(e.amount), 0)} cents
                       </td>
                       <td style={s.td}></td>
                     </tr>

@@ -28,8 +28,8 @@ export default function ServerStatus() {
   return (
     <div role="alert" style={s.banner}>
       ⚠️ <strong>Backend is not running.</strong> Start the server:&nbsp;
-      <code style={s.code}>cd server &amp;&amp; npm run dev</code>
-      &nbsp;and make sure MongoDB is running on port 27017.
+      <code style={s.code}>Set-Location server; npm run dev</code>
+      &nbsp;and make sure PostgreSQL is running on port 5432.
     </div>
   );
 }

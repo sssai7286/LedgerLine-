@@ -7,6 +7,7 @@ import LedgerOperations    from './components/LedgerOperations';
 import TransactionHistory  from './components/TransactionHistory';
 import AuditLogViewer      from './components/AuditLogViewer';
 import ServerStatus        from './components/ServerStatus';
+import TransactionForm     from './components/TransactionForm';
 
 function Dashboard() {
   const { user } = useAuth();
@@ -24,7 +25,10 @@ function Dashboard() {
           <AccountList onSelect={() => setActiveTab('Transactions')} />
         )}
         {activeTab === 'Operations' && (
-          <LedgerOperations onDone={bump} />
+          <>
+            <LedgerOperations onDone={bump} />
+            <TransactionForm onCreated={bump} />
+          </>
         )}
         {activeTab === 'Transactions' && (
           <TransactionHistory refresh={refresh} />

@@ -1,168 +1,86 @@
-# How to Run LedgerLine Locally
+# Run LedgerLine locally
 
-## Prerequisites
+LedgerLine uses PostgreSQL, Express, React, and Node.js. Install Node.js 18+ and PostgreSQL 14+ first.
 
-| Tool | Version | Download |
-|------|---------|----------|
-| Node.js | ≥ 18 | https://nodejs.org |
-| MongoDB | ≥ 6 (Community) | https://www.mongodb.com/try/download/community |
-| npm | ≥ 9 | Comes with Node.js |
+## 1. Create the databases
 
----
+Connect to PostgreSQL as an administrator and run:
 
-## Step 1 — Install MongoDB (Required)
-
-MongoDB is not installed on this machine. Install it:
-
-### Option A — MongoDB Community Server (local, recommended)
-1. Download from https://www.mongodb.com/try/download/community
-2. Install with default settings (installs as a Windows service)
-3. MongoDB will auto-start on port `27017`
-
-### Option B — MongoDB Atlas (free cloud, no install needed)
-1. Go to https://cloud.mongodb.com → create a free M0 cluster
-2. Create a database user (username + password)
-3. Get your connection string:  
-   `mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/ledgerline`
-4. Paste it into `.env` as `MONGO_URI`
-
----
-
-## Step 2 — Configure Environment
-
-Copy `.env.example` to `.env` (already done) and set your values:
-
-```
-# .env
-MONGO_URI=mongodb://localhost:27017/ledgerline    ← or your Atlas URI
-JWT_SECRET=change_this_to_something_long_and_random
-JWT_EXPIRES_IN=7d
-PORT=5000
-NODE_ENV=development
-CLIENT_URL=http://localhost:3000
+```sql
+CREATE USER ledgerline WITH PASSWORD 'ledgerline';
+CREATE DATABASE ledgerline OWNER ledgerline;
+CREATE DATABASE ledgerline_test OWNER ledgerline;
 ```
 
----
+Use your own local-only password if desired, then update the database URLs in `.env`.
 
-## Step 3 — Seed Demo Data (optional but recommended)
+## 2. Configure the environment
+
+From the project root:
 
 ```powershell
-cd server
-npm run seed
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-This creates:
-| Email | Password | Role |
-|-------|----------|------|
-| admin@ledgerline.com | password123 | ADMIN |
-| alice@ledgerline.com | password123 | ACCOUNT_HOLDER |
-| bob@ledgerline.com | password123 | ACCOUNT_HOLDER |
-| auditor@ledgerline.com | password123 | AUDITOR |
+Add `DATABASE_URL`, `DATABASE_TEST_URL`, and `DATABASE_SSL` from `.env.example` to `.env`. Keep any existing `JWT_SECRET`, set a unique secret if needed, and point the test URL at a dedicated database; tests truncate its tables.
 
----
-
-## Step 4 — Start the Backend
-
-Open a terminal:
+## 3. Install packages
 
 ```powershell
-cd C:\Users\Hp\Documents\snovyasis\server
+Set-Location server
+npm install
+Set-Location ..\client
+npm install
+```
+
+## 4. Start PostgreSQL and the backend
+
+Make sure PostgreSQL is running, then from the project root:
+
+```powershell
+Set-Location server
 npm run dev
 ```
 
-Expected output:
-```
-LedgerLine API running → http://localhost:5000
-API Docs            → http://localhost:5000/api/docs
-Health check        → http://localhost:5000/api/health
-MongoDB connected: localhost
-```
+The API applies `server/db/schema.sql` at startup. The API listens at `http://localhost:5000`.
 
----
+## 5. Start the frontend
 
-## Step 5 — Start the Frontend
-
-Open a **second** terminal:
+Open a second terminal at the project root:
 
 ```powershell
-cd C:\Users\Hp\Documents\snovyasis\client
+Set-Location client
 npm start
 ```
 
-Frontend opens at: **http://localhost:3000**
+The React app opens at `http://localhost:3000` and proxies `/api` requests to the backend.
 
----
+## 6. Optional demo data
 
-## Step 6 — Run Tests
+From a terminal at the project root:
 
 ```powershell
-cd C:\Users\Hp\Documents\snovyasis\server
+Set-Location server
+npm run seed
+```
+
+**Warning:** seeding truncates all application data. Demo users use `password123`; change those passwords after local testing.
+
+## 7. Run tests
+
+Ensure `DATABASE_TEST_URL` in `.env` points to the dedicated test database, then:
+
+```powershell
+Set-Location server
 npm test
 ```
 
-Runs 28 tests across auth, accounts, transactions (deposit/withdraw/transfer),
-idempotency, negative balance prevention, concurrency, and RBAC.
-
----
-
-## URLs
+## Useful URLs
 
 | URL | Description |
-|-----|-------------|
-| http://localhost:3000 | React frontend |
-| http://localhost:5000/api/health | Backend health check |
-| http://localhost:5000/api/docs | Swagger API documentation |
+|---|---|
+| `http://localhost:3000` | React frontend |
+| `http://localhost:5000/api/health` | API/database health |
+| `http://localhost:5000/api/docs` | Swagger API docs |
 
----
-
-## Docker (alternative — runs everything together)
-
-Requires Docker Desktop installed:
-
-```powershell
-# In the project root
-docker-compose up --build
-```
-
-Services:
-- MongoDB on port 27017
-- Backend on port 5000
-- Frontend on port 3000
-
----
-
-## Project Structure
-
-```
-snovyasis/
-├── server/
-│   ├── app.js                    # Express app (imported by tests)
-│   ├── index.js                  # DB connect + listen
-│   ├── models/                   # Mongoose models
-│   │   ├── User.js
-│   │   ├── Account.js
-│   │   ├── Transaction.js
-│   │   ├── JournalEntry.js
-│   │   └── AuditLog.js
-│   ├── controllers/              # Route handlers
-│   ├── routes/                   # Express routers
-│   ├── middleware/auth.js         # JWT protect + RBAC authorize
-│   ├── docs/swagger.js           # OpenAPI 3.0 spec
-│   ├── db/seed.js                # Demo data seeder
-│   └── tests/                    # Jest + Supertest tests
-│       ├── setup.js
-│       ├── auth.test.js
-│       ├── accounts.test.js
-│       ├── transactions.test.js
-│       └── rbac.test.js
-├── client/
-│   └── src/
-│       ├── components/           # React UI components
-│       ├── context/AuthContext.jsx
-│       ├── api/api.js
-│       └── App.jsx
-├── Dockerfile
-├── docker-compose.yml
-├── .env.example
-└── HOW_TO_RUN.md
-```
+For Docker, set `JWT_SECRET` and run `docker compose up --build`; the production React app and API are served at `http://localhost:5000`.

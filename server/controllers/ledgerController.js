@@ -1,254 +1,18 @@
-const mongoose    = require('mongoose');
-const Account      = require('../models/Account');
-const Transaction  = require('../models/Transaction');
-const JournalEntry = require('../models/JournalEntry');
-const AuditLog     = require('../models/AuditLog');
+const { pool } = require('../config/db');
 
-/**
- * Shared helper — writes journal entries + updates denormalised balances
- * atomically inside an existing Mongoose session.
- *
- * legs: [{ account_id, amount }]  (amount > 0 = debit, < 0 = credit)
- * Invariant enforced: SUM(legs.amount) === 0
- */
-async function postJournalLegs(transaction, legs, session) {
-  // Double-entry invariant check
-  const net = legs.reduce((s, l) => s + l.amount, 0);
-  if (net !== 0) {
-    throw new Error(`Unbalanced journal legs: net = ${net}, must be 0`);
-  }
+const isUuid = (value) => typeof value === 'string'
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
-  // Insert journal entries
-  await JournalEntry.create(
-    legs.map((l) => ({
-      transaction_id: transaction._id,
-      account_id:     l.account_id,
-      amount:         l.amount,
-    })),
-    { session }
-  );
-
-  // Update denormalised balance on each account atomically
-  for (const leg of legs) {
-    const updated = await Account.findOneAndUpdate(
-      {
-        _id:       leg.account_id,
-        is_active: true,
-        // Prevent negative balance: only allow debit if balance >= |credit|
-        ...(leg.amount < 0
-          ? { balance_cents: { $gte: Math.abs(leg.amount) } }
-          : {}),
-      },
-      { $inc: { balance_cents: leg.amount } },
-      { new: true, session }
-    );
-
-    if (!updated) {
-      // Either account not found, inactive, or insufficient balance
-      const acct = await Account.findById(leg.account_id).session(session);
-      if (!acct || !acct.is_active) {
-        throw new Error(`Account ${leg.account_id} not found or inactive`);
-      }
-      throw new Error(
-        `Insufficient balance on account ${acct.account_name}: ` +
-        `has ${acct.balance_cents} cents, needs ${Math.abs(leg.amount)} cents`
-      );
-    }
+class OperationError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
   }
 }
 
-// ── POST /api/ledger/deposit ──────────────────────────────────────
-// Body: { account_id, amount_cents, currency, idempotency_key, description }
-const deposit = async (req, res) => {
-  const { account_id, amount_cents, currency, idempotency_key, description } = req.body;
-
-  if (!account_id || !amount_cents || !currency || !idempotency_key) {
-    return res.status(400).json({
-      error: 'account_id, amount_cents, currency, and idempotency_key are required',
-    });
-  }
-  if (!Number.isInteger(amount_cents) || amount_cents <= 0) {
-    return res.status(400).json({ error: 'amount_cents must be a positive integer' });
-  }
-
-  // Idempotency — return existing transaction if key already used
-  const existing = await Transaction.findOne({ idempotency_key });
-  if (existing) {
-    return res.status(200).json({ transaction: existing, idempotent: true });
-  }
-
-  const account = await Account.findById(account_id);
-  if (!account) return res.status(404).json({ error: 'Account not found' });
-  if (!account.is_active) return res.status(400).json({ error: 'Account is inactive' });
-
-  // ACCOUNT_HOLDER may only deposit into their own accounts
-  if (
-    req.user.role === 'ACCOUNT_HOLDER' &&
-    account.user_id.toString() !== req.user._id.toString()
-  ) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-
-  const session = await mongoose.startSession();
-  try {
-    session.startTransaction();
-
-    const [transaction] = await Transaction.create(
-      [{
-        idempotency_key,
-        type:         'DEPOSIT',
-        description:  description || `Deposit to ${account.account_name}`,
-        initiated_by: req.user._id,
-        amount_cents,
-        currency:     currency.toUpperCase(),
-      }],
-      { session }
-    );
-
-    // Deposit: DEBIT the account (+amount)
-    // Contra: CREDIT a virtual "External Funds" account (not tracked, so
-    // we create a single-leg debit — the external source is outside the ledger)
-    // For a closed ledger with an external entry account, add an external account.
-    // Here we use a single-leg per industry practice for external deposits.
-    await JournalEntry.create(
-      [{ transaction_id: transaction._id, account_id, amount: amount_cents }],
-      { session }
-    );
-
-    await Account.findByIdAndUpdate(
-      account_id,
-      { $inc: { balance_cents: amount_cents } },
-      { session }
-    );
-
-    await session.commitTransaction();
-
-    await AuditLog.create({
-      user_id:    req.user._id,
-      user_email: req.user.email,
-      role:       req.user.role,
-      action:     'DEPOSIT',
-      resource:   'Transaction',
-      resource_id: transaction._id.toString(),
-      meta:       { account_id, amount_cents, currency },
-      ip:         req.ip,
-      status:     'SUCCESS',
-    });
-
-    res.status(201).json({ transaction });
-  } catch (err) {
-    await session.abortTransaction();
-    console.error(err);
-    if (err.code === 11000) {
-      return res.status(409).json({ error: 'Duplicate idempotency_key' });
-    }
-    res.status(500).json({ error: err.message || 'Deposit failed' });
-  } finally {
-    session.endSession();
-  }
-};
-
-// ── POST /api/ledger/withdraw ─────────────────────────────────────
-// Body: { account_id, amount_cents, currency, idempotency_key, description }
-const withdraw = async (req, res) => {
-  const { account_id, amount_cents, currency, idempotency_key, description } = req.body;
-
-  if (!account_id || !amount_cents || !currency || !idempotency_key) {
-    return res.status(400).json({
-      error: 'account_id, amount_cents, currency, and idempotency_key are required',
-    });
-  }
-  if (!Number.isInteger(amount_cents) || amount_cents <= 0) {
-    return res.status(400).json({ error: 'amount_cents must be a positive integer' });
-  }
-
-  const existing = await Transaction.findOne({ idempotency_key });
-  if (existing) {
-    return res.status(200).json({ transaction: existing, idempotent: true });
-  }
-
-  const account = await Account.findById(account_id);
-  if (!account) return res.status(404).json({ error: 'Account not found' });
-  if (!account.is_active) return res.status(400).json({ error: 'Account is inactive' });
-
-  if (
-    req.user.role === 'ACCOUNT_HOLDER' &&
-    account.user_id.toString() !== req.user._id.toString()
-  ) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-
-  // Pre-flight balance check (optimistic — re-checked atomically in update)
-  if (account.balance_cents < amount_cents) {
-    return res.status(400).json({
-      error: `Insufficient balance: has ${account.balance_cents} cents, needs ${amount_cents} cents`,
-    });
-  }
-
-  const session = await mongoose.startSession();
-  try {
-    session.startTransaction();
-
-    const [transaction] = await Transaction.create(
-      [{
-        idempotency_key,
-        type:         'WITHDRAWAL',
-        description:  description || `Withdrawal from ${account.account_name}`,
-        initiated_by: req.user._id,
-        amount_cents,
-        currency:     currency.toUpperCase(),
-      }],
-      { session }
-    );
-
-    // CREDIT the account (negative amount = money leaves)
-    await JournalEntry.create(
-      [{ transaction_id: transaction._id, account_id, amount: -amount_cents }],
-      { session }
-    );
-
-    // Atomic balance decrement — fails if balance would go negative
-    const updated = await Account.findOneAndUpdate(
-      { _id: account_id, balance_cents: { $gte: amount_cents } },
-      { $inc: { balance_cents: -amount_cents } },
-      { new: true, session }
-    );
-
-    if (!updated) {
-      throw new Error('Insufficient balance (concurrent update conflict)');
-    }
-
-    await session.commitTransaction();
-
-    await AuditLog.create({
-      user_id:    req.user._id,
-      user_email: req.user.email,
-      role:       req.user.role,
-      action:     'WITHDRAWAL',
-      resource:   'Transaction',
-      resource_id: transaction._id.toString(),
-      meta:       { account_id, amount_cents, currency },
-      ip:         req.ip,
-      status:     'SUCCESS',
-    });
-
-    res.status(201).json({ transaction });
-  } catch (err) {
-    await session.abortTransaction();
-    console.error(err);
-    if (err.code === 11000) {
-      return res.status(409).json({ error: 'Duplicate idempotency_key' });
-    }
-    res.status(400).json({ error: err.message || 'Withdrawal failed' });
-  } finally {
-    session.endSession();
-  }
-};
-
-// ── POST /api/ledger/transfer ─────────────────────────────────────
-// Body: { from_account_id, to_account_id, amount_cents, currency, idempotency_key, description }
-const transfer = async (req, res) => {
+const performOperation = async (req, res, type) => {
   const {
+    account_id,
     from_account_id,
     to_account_id,
     amount_cents,
@@ -257,98 +21,174 @@ const transfer = async (req, res) => {
     description,
   } = req.body;
 
-  if (!from_account_id || !to_account_id || !amount_cents || !currency || !idempotency_key) {
-    return res.status(400).json({
-      error: 'from_account_id, to_account_id, amount_cents, currency, and idempotency_key are required',
-    });
+  const transfer = type === 'TRANSFER';
+  const requestedAccountIds = transfer ? [from_account_id, to_account_id] : [account_id];
+  if (requestedAccountIds.some((id) => !isUuid(id))) {
+    return res.status(400).json({ error: 'A valid account ID is required' });
   }
-  if (from_account_id === to_account_id) {
+  if (transfer && from_account_id === to_account_id) {
     return res.status(400).json({ error: 'Cannot transfer to the same account' });
   }
-  if (!Number.isInteger(amount_cents) || amount_cents <= 0) {
-    return res.status(400).json({ error: 'amount_cents must be a positive integer' });
+  if (!Number.isSafeInteger(amount_cents) || amount_cents <= 0) {
+    return res.status(400).json({ error: 'amount_cents must be a positive safe integer' });
+  }
+  if (typeof currency !== 'string' || !/^[A-Z]{3}$/i.test(currency)) {
+    return res.status(400).json({ error: 'currency must be a 3-letter ISO 4217 code' });
+  }
+  if (typeof idempotency_key !== 'string' || !idempotency_key.trim() || idempotency_key.length > 255) {
+    return res.status(400).json({ error: 'idempotency_key is required and must be at most 255 characters' });
+  }
+  if (description != null && typeof description !== 'string') {
+    return res.status(400).json({ error: 'description must be a string' });
   }
 
-  const existing = await Transaction.findOne({ idempotency_key });
-  if (existing) {
-    return res.status(200).json({ transaction: existing, idempotent: true });
+  const accountIds = requestedAccountIds.map((id) => id.toLowerCase());
+  if (transfer && accountIds[0] === accountIds[1]) {
+    return res.status(400).json({ error: 'Cannot transfer to the same account' });
   }
-
-  const [fromAccount, toAccount] = await Promise.all([
-    Account.findById(from_account_id),
-    Account.findById(to_account_id),
-  ]);
-
-  if (!fromAccount) return res.status(404).json({ error: 'Source account not found' });
-  if (!toAccount)   return res.status(404).json({ error: 'Destination account not found' });
-  if (!fromAccount.is_active) return res.status(400).json({ error: 'Source account is inactive' });
-  if (!toAccount.is_active)   return res.status(400).json({ error: 'Destination account is inactive' });
-
-  // Ownership check — ACCOUNT_HOLDER must own the source account
-  if (
-    req.user.role === 'ACCOUNT_HOLDER' &&
-    fromAccount.user_id.toString() !== req.user._id.toString()
-  ) {
-    return res.status(403).json({ error: 'Access denied: you do not own the source account' });
-  }
-
-  if (fromAccount.balance_cents < amount_cents) {
-    return res.status(400).json({
-      error: `Insufficient balance: has ${fromAccount.balance_cents} cents, needs ${amount_cents} cents`,
-    });
-  }
-
-  const session = await mongoose.startSession();
+  const client = await pool.connect();
   try {
-    session.startTransaction();
+    await client.query('BEGIN');
 
-    const [transaction] = await Transaction.create(
-      [{
-        idempotency_key,
-        type:         'TRANSFER',
-        description:  description || `Transfer: ${fromAccount.account_name} → ${toAccount.account_name}`,
-        initiated_by: req.user._id,
-        amount_cents,
-        currency:     currency.toUpperCase(),
-      }],
-      { session }
+    const existing = await client.query(
+      'SELECT * FROM transactions WHERE idempotency_key = $1',
+      [idempotency_key.trim()]
     );
-
-    // True double-entry: CREDIT source, DEBIT destination — NET = 0
-    await postJournalLegs(
-      transaction,
-      [
-        { account_id: from_account_id, amount: -amount_cents }, // CREDIT source
-        { account_id: to_account_id,   amount:  amount_cents }, // DEBIT  destination
-      ],
-      session
-    );
-
-    await session.commitTransaction();
-
-    await AuditLog.create({
-      user_id:    req.user._id,
-      user_email: req.user.email,
-      role:       req.user.role,
-      action:     'TRANSFER',
-      resource:   'Transaction',
-      resource_id: transaction._id.toString(),
-      meta:       { from_account_id, to_account_id, amount_cents, currency },
-      ip:         req.ip,
-      status:     'SUCCESS',
-    });
-
-    res.status(201).json({ transaction });
-  } catch (err) {
-    await session.abortTransaction();
-    console.error(err);
-    if (err.code === 11000) {
-      return res.status(409).json({ error: 'Duplicate idempotency_key' });
+    if (existing.rows[0]) {
+      await client.query('COMMIT');
+      return res.status(200).json({ transaction: existing.rows[0], idempotent: true });
     }
-    res.status(400).json({ error: err.message || 'Transfer failed' });
+
+    const accountResult = await client.query(
+      `SELECT * FROM accounts
+       WHERE id = ANY($1::uuid[]) AND is_active = TRUE
+       ORDER BY id FOR UPDATE`,
+      [accountIds]
+    );
+    if (accountResult.rows.length !== accountIds.length) {
+      throw new OperationError(404, 'Account not found or inactive');
+    }
+
+    const accounts = new Map(accountResult.rows.map((account) => [account.id, account]));
+    const source = accounts.get(accountIds[0]);
+    const destination = transfer ? accounts.get(accountIds[1]) : null;
+
+    if (req.user.role === 'ACCOUNT_HOLDER' && source.user_id !== req.user.id) {
+      throw new OperationError(403, 'Access denied: you do not own the source account');
+    }
+    if (source.currency !== currency.toUpperCase()
+      || (destination && destination.currency !== currency.toUpperCase())) {
+      throw new OperationError(400, 'Currency must match all involved accounts');
+    }
+    if (type !== 'DEPOSIT' && Number(source.balance_cents) < amount_cents) {
+      throw new OperationError(400, 'Insufficient balance');
+    }
+    if ((type === 'DEPOSIT' && !Number.isSafeInteger(Number(source.balance_cents) + amount_cents))
+      || (destination && !Number.isSafeInteger(Number(destination.balance_cents) + amount_cents))) {
+      throw new OperationError(400, 'Resulting balance exceeds the supported range');
+    }
+
+    const defaultDescription = type === 'DEPOSIT'
+      ? `Deposit to ${source.account_name}`
+      : type === 'WITHDRAWAL'
+        ? `Withdrawal from ${source.account_name}`
+        : `Transfer: ${source.account_name} to ${destination.account_name}`;
+    const txResult = await client.query(
+      `INSERT INTO transactions
+         (idempotency_key, type, description, initiated_by, amount_cents, currency)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [
+        idempotency_key.trim(),
+        type,
+        description?.trim() || defaultDescription,
+        req.user.id,
+        amount_cents,
+        currency.toUpperCase(),
+      ]
+    );
+    const transaction = txResult.rows[0];
+
+    if (type === 'DEPOSIT') {
+      await client.query(
+        `INSERT INTO journal_entries (transaction_id, account_id, amount)
+         VALUES ($1,$2,$3),($1,NULL,$4)`,
+        [transaction.id, source.id, amount_cents, -amount_cents]
+      );
+      await client.query(
+        'UPDATE accounts SET balance_cents = balance_cents + $1, updated_at = NOW() WHERE id = $2',
+        [amount_cents, source.id]
+      );
+    } else if (type === 'WITHDRAWAL') {
+      await client.query(
+        `INSERT INTO journal_entries (transaction_id, account_id, amount)
+         VALUES ($1,$2,$3),($1,NULL,$4)`,
+        [transaction.id, source.id, -amount_cents, amount_cents]
+      );
+      await client.query(
+        `UPDATE accounts SET balance_cents = balance_cents - $1, updated_at = NOW()
+         WHERE id = $2 AND balance_cents >= $1`,
+        [amount_cents, source.id]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO journal_entries (transaction_id, account_id, amount)
+         VALUES ($1,$2,$3),($1,$4,$5)`,
+        [transaction.id, source.id, -amount_cents, destination.id, amount_cents]
+      );
+      await client.query(
+        'UPDATE accounts SET balance_cents = balance_cents - $1, updated_at = NOW() WHERE id = $2',
+        [amount_cents, source.id]
+      );
+      await client.query(
+        'UPDATE accounts SET balance_cents = balance_cents + $1, updated_at = NOW() WHERE id = $2',
+        [amount_cents, destination.id]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO audit_logs
+         (user_id,user_email,role,action,resource,resource_id,ip,status,meta)
+       VALUES ($1,$2,$3,$4,'Transaction',$5,$6,'SUCCESS',$7)`,
+      [
+        req.user.id,
+        req.user.email,
+        req.user.role,
+        type,
+        transaction.id,
+        req.ip,
+        JSON.stringify({ accountIds, amount_cents, currency: currency.toUpperCase() }),
+      ]
+    );
+    await client.query('COMMIT');
+    return res.status(201).json({ transaction });
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Ledger transaction rollback failed:', rollbackError.message);
+    }
+
+    if (err.code === '23505') {
+      const existing = await pool.query(
+        'SELECT * FROM transactions WHERE idempotency_key = $1',
+        [idempotency_key.trim()]
+      );
+      if (existing.rows[0]) {
+        return res.status(200).json({ transaction: existing.rows[0], idempotent: true });
+      }
+    }
+    if (err instanceof OperationError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    console.error(`${type} failed:`, err.message);
+    return res.status(500).json({ error: `${type.toLowerCase()} failed` });
   } finally {
-    session.endSession();
+    client.release();
   }
 };
+
+const deposit = (req, res) => performOperation(req, res, 'DEPOSIT');
+const withdraw = (req, res) => performOperation(req, res, 'WITHDRAWAL');
+const transfer = (req, res) => performOperation(req, res, 'TRANSFER');
 
 module.exports = { deposit, withdraw, transfer };

@@ -1,36 +1,24 @@
-# Database Layer
+# PostgreSQL database layer
 
-LedgerLine uses **MongoDB** with **Mongoose** ODM.
+LedgerLine stores users, accounts, transactions, journal entries, and audit logs in PostgreSQL. `config/db.js` creates a shared `pg` connection pool and applies `schema.sql` before the API starts.
 
-## Models
+## Money movement
 
-| Model | Collection | Maps to (PostgreSQL equivalent) |
-|-------|------------|----------------------------------|
-| `Account` | `accounts` | `accounts` table |
-| `Transaction` | `transactions` | `transactions` table |
-| `JournalEntry` | `journalentries` | `journal_entries` table |
+Each money operation runs in one SQL transaction:
 
-## Double-Entry Invariant
+1. Lock the affected accounts and validate ownership, currency, and balance.
+2. Insert the transaction and its journal entries.
+3. Update account balances and append the audit event.
+4. Commit, or roll back all changes on failure.
 
-MongoDB does not have deferred triggers, so balance is enforced at two layers:
+The deferred constraint trigger checks that each transaction's journal entries sum to zero. Deposits and withdrawals balance against an external clearing leg (`journal_entries.account_id IS NULL`); transfers and manual journal transactions balance between accounts. Account balances sum only entries assigned to that account.
 
-1. **Controller** (`transactionController.js`) — rejects any request where `SUM(entries.amount) ≠ 0` before touching the DB.
-2. **MongoDB Session** — all inserts (Transaction + JournalEntries) run inside a single session with `startTransaction()` / `commitTransaction()`. If anything fails, `abortTransaction()` rolls everything back atomically.
+## Amounts and concurrency
 
-## Amount Storage
+Amounts are stored as integer cents (or the currency's smallest unit). Account rows are locked during writes so concurrent withdrawals cannot spend the same funds. A unique idempotency key prevents duplicate postings.
 
-`amount` is stored as a plain **integer** representing the **smallest currency unit**:
+## Schema and setup
 
-| Currency | Unit | Example |
-|----------|------|---------|
-| USD | cents | $1.99 → `199` |
-| INR | paise | ₹1.50 → `150` |
-| JPY | yen (no sub-unit) | ¥500 → `500` |
+`schema.sql` is applied on backend startup. Configure `DATABASE_URL` for the application and a separate `DATABASE_TEST_URL` for tests. The test suite truncates tables in the configured test database.
 
-This avoids all floating-point rounding errors.
-
-## Indexes
-
-- `Account`: `owner_id`
-- `Transaction`: `idempotency_key` (unique)
-- `JournalEntry`: `transaction_id`, `account_id`
+`npm run seed` clears and reloads the configured application database with demo users and accounts; do not run it against data you need to keep.

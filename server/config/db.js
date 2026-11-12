@@ -1,40 +1,36 @@
-const mongoose = require('mongoose');
-const dns      = require('dns');
+const { Pool, types } = require('pg');
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+
+types.setTypeParser(20, Number);
+
+const connectionString = process.env.NODE_ENV === 'test'
+  ? process.env.DATABASE_TEST_URL || process.env.DATABASE_URL
+  : process.env.DATABASE_URL;
+
+const pool = new Pool({
+  connectionString,
+  ssl: process.env.DATABASE_SSL === 'true'
+    ? { rejectUnauthorized: true }
+    : false,
+});
+
+pool.on('error', (err) => {
+  console.error('Unexpected PostgreSQL client error:', err.message);
+});
 
 const connectDB = async () => {
-  const uri = process.env.MONGO_URI;
-
-  if (!uri) {
-    console.error('❌  MONGO_URI is not set in .env');
-    process.exit(1);
+  if (!connectionString) {
+    throw new Error('DATABASE_URL must be set to connect to PostgreSQL');
   }
 
-  // ── DNS fix ────────────────────────────────────────────────────
-  // The local DNS resolver (172.16.0.1) cannot resolve MongoDB Atlas
-  // SRV records (_mongodb._tcp.<host>), which are required by the
-  // mongodb+srv:// scheme.  Cloudflare (1.1.1.1) and Google (8.8.8.8)
-  // resolve them correctly.  Setting these servers here makes Node's
-  // built-in DNS module (used by the MongoDB driver for SRV lookups)
-  // bypass the broken local resolver — no system-level change needed.
-  dns.setServers(['1.1.1.1', '8.8.8.8', '1.0.0.1']);
+  await pool.query('SELECT 1');
+  console.log('PostgreSQL connected');
 
-  try {
-    const conn = await mongoose.connect(uri, {
-      // Increase the server-selection timeout so a slow first lookup
-      // has time to succeed before we give up.
-      serverSelectionTimeoutMS: 10000,
-      connectTimeoutMS:          10000,
-    });
-    console.log(`✅  MongoDB connected: ${conn.connection.host}`);
-  } catch (err) {
-    console.error('❌  MongoDB connection failed:', err.message);
-    console.error('');
-    console.error('    Diagnostics:');
-    console.error('    • MONGO_URI cluster: check .env');
-    console.error('    • Ensure your IP is whitelisted in Atlas → Network Access');
-    console.error('    • Or set 0.0.0.0/0 in Atlas for development');
-    process.exit(1);
-  }
+  const schema = fs.readFileSync(path.join(__dirname, '../db/schema.sql'), 'utf8');
+  await pool.query(schema);
+  console.log('Database schema applied');
 };
 
-module.exports = connectDB;
+module.exports = { pool, connectDB };

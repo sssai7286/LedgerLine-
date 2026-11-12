@@ -60,7 +60,7 @@ export default function LedgerOperations({ onDone }) {
       ? <select key={k} value={form[k] || ''} onChange={(e) => setForm({ ...form, [k]: e.target.value })}
           required style={s.input} aria-label={placeholder}>
           <option value="">— {placeholder} —</option>
-          {opts.map((o) => <option key={o._id} value={o._id}>{o.account_name} ({o.currency})</option>)}
+          {opts.map((o) => <option key={o.id} value={o.id}>{o.account_name} ({o.currency})</option>)}
         </select>
       : <input key={k} type={type} placeholder={placeholder} value={form[k] || ''}
           onChange={(e) => setForm({ ...form, [k]: e.target.value })}

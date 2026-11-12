@@ -79,7 +79,7 @@ export default function JournalEntries({ refresh }) {
                   {detail.entries.map((e) => (
                     <tr key={e.id}>
                       <td style={{ ...styles.td, fontFamily: 'monospace', fontSize: 12 }}>
-                        {e.account_id.slice(0, 12)}…
+                        {e.account_id ? `${e.account_id.slice(0, 12)}…` : 'External clearing'}
                       </td>
                       <td style={{ ...styles.td, color: e.amount > 0 ? '#16a34a' : '#dc2626' }}>
                         {e.amount > 0 ? 'Debit' : 'Credit'}

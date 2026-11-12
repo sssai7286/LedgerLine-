@@ -31,6 +31,13 @@ describe('Authentication', () => {
         .send({ name: 'X', email: 'x@x.com', password: 'short' });
       expect(res.status).toBe(400);
     });
+
+    it('does not allow public registration to assign privileged roles', async () => {
+      const res = await request(app).post('/api/auth/register')
+        .send({ ...user, email: 'admin-choice@ledger.com', role: 'ADMIN' });
+      expect(res.status).toBe(201);
+      expect(res.body.user.role).toBe('ACCOUNT_HOLDER');
+    });
   });
 
   // ── Login ───────────────────────────────────────────────────────

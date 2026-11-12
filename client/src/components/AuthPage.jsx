@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 export default function AuthPage() {
   const { storeAuth } = useAuth();
   const [mode,  setMode]  = useState('login'); // 'login' | 'register'
-  const [form,  setForm]  = useState({ name: '', email: '', password: '', role: 'ACCOUNT_HOLDER' });
+  const [form,  setForm]  = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [busy,  setBusy]  = useState(false);
 
@@ -72,19 +72,6 @@ export default function AuthPage() {
             style={s.input}
             aria-label="Password"
           />
-          {mode === 'register' && (
-            <select
-              value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value })}
-              style={s.input}
-              aria-label="Role"
-            >
-              <option value="ACCOUNT_HOLDER">Account Holder</option>
-              <option value="AUDITOR">Auditor</option>
-              <option value="ADMIN">Admin</option>
-            </select>
-          )}
-
           {error && <p role="alert" style={s.error}>{error}</p>}
 
           <button type="submit" disabled={busy} style={s.btn}>

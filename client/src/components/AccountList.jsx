@@ -19,8 +19,8 @@ export default function AccountList({ onSelect }) {
       setAccounts(data);
       const bals = {};
       await Promise.all(data.map(async (a) => {
-        const b = await fetchBalance(a._id);
-        bals[a._id] = b.balance_cents;
+        const b = await fetchBalance(a.id);
+        bals[a.id] = b.balance_cents;
       }));
       setBalances(bals);
     } catch { setError('Failed to load accounts'); }
@@ -74,13 +74,13 @@ export default function AccountList({ onSelect }) {
 
       <div style={s.grid}>
         {accounts.map((a) => (
-          <div key={a._id} style={s.card} onClick={() => onSelect?.(a)} role="button" tabIndex={0}
+          <div key={a.id} style={s.card} onClick={() => onSelect?.(a)} role="button" tabIndex={0}
             onKeyDown={(e) => e.key === 'Enter' && onSelect?.(a)}>
             <div style={s.cardTop}>
               <span style={s.acctName}>{a.account_name}</span>
               <span style={{ ...s.badge, background: typeColor(a.account_type) }}>{a.account_type}</span>
             </div>
-            <div style={s.balance}>{fmt(balances[a._id], a.currency)}</div>
+            <div style={s.balance}>{fmt(balances[a.id], a.currency)}</div>
             <div style={s.sub}>{a.currency} · {new Date(a.created_at).toLocaleDateString()}</div>
           </div>
         ))}

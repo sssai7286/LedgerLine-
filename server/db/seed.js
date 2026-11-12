@@ -1,118 +1,117 @@
-/**
- * LedgerLine – Database Seed Script
- * -----------------------------------
- * Creates demo users, accounts, and sample transactions.
- *
- * Usage:
- *   cd server
- *   node db/seed.js
- *
- * WARNING: Clears all existing data before seeding.
- */
-
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
-const mongoose    = require('mongoose');
-const bcrypt      = require('bcryptjs');
-const User        = require('../models/User');
-const Account     = require('../models/Account');
-const Transaction = require('../models/Transaction');
-const JournalEntry= require('../models/JournalEntry');
-const AuditLog    = require('../models/AuditLog');
-
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/ledgerline';
+const bcrypt = require('bcryptjs');
+const { pool, connectDB } = require('../config/db');
 
 async function seed() {
-  await mongoose.connect(MONGO_URI);
-  console.log('Connected to MongoDB:', MONGO_URI);
+  await connectDB();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'TRUNCATE TABLE audit_logs, journal_entries, transactions, accounts, users RESTART IDENTITY CASCADE'
+    );
 
-  // Clear all collections
-  await Promise.all([
-    User.deleteMany({}),
-    Account.deleteMany({}),
-    Transaction.deleteMany({}),
-    JournalEntry.deleteMany({}),
-    AuditLog.deleteMany({}),
-  ]);
-  console.log('Cleared existing data.');
+    const password = await bcrypt.hash('password123', 12);
+    const users = await Promise.all([
+      client.query(
+        'INSERT INTO users (name, email, password, role) VALUES ($1,$2,$3,$4) RETURNING id',
+        ['Admin User', 'admin@ledgerline.com', password, 'ADMIN']
+      ),
+      client.query(
+        'INSERT INTO users (name, email, password, role) VALUES ($1,$2,$3,$4) RETURNING id',
+        ['Alice Smith', 'alice@ledgerline.com', password, 'ACCOUNT_HOLDER']
+      ),
+      client.query(
+        'INSERT INTO users (name, email, password, role) VALUES ($1,$2,$3,$4) RETURNING id',
+        ['Bob Jones', 'bob@ledgerline.com', password, 'ACCOUNT_HOLDER']
+      ),
+      client.query(
+        'INSERT INTO users (name, email, password, role) VALUES ($1,$2,$3,$4) RETURNING id',
+        ['Eve Auditor', 'auditor@ledgerline.com', password, 'AUDITOR']
+      ),
+    ]);
+    const userIds = users.map((result) => result.rows[0].id);
+    const alice = userIds[1];
+    const bob = userIds[2];
 
-  // ── Create users ───────────────────────────────────────────────
-  const password = await bcrypt.hash('password123', 12);
+    const accounts = await Promise.all([
+      client.query(
+        `INSERT INTO accounts (user_id, account_name, account_type, currency)
+         VALUES ($1,'Alice Checking','ASSET','USD') RETURNING id`,
+        [alice]
+      ),
+      client.query(
+        `INSERT INTO accounts (user_id, account_name, account_type, currency)
+         VALUES ($1,'Alice Savings','ASSET','USD') RETURNING id`,
+        [alice]
+      ),
+      client.query(
+        `INSERT INTO accounts (user_id, account_name, account_type, currency)
+         VALUES ($1,'Bob Checking','ASSET','USD') RETURNING id`,
+        [bob]
+      ),
+    ]);
+    const [aliceChecking, aliceSavings, bobChecking] = accounts.map((result) => result.rows[0].id);
 
-  const [admin, alice, bob, auditor] = await User.insertMany([
-    { name: 'Admin User',   email: 'admin@ledgerline.com',  password, role: 'ADMIN'           },
-    { name: 'Alice Smith',  email: 'alice@ledgerline.com',  password, role: 'ACCOUNT_HOLDER'  },
-    { name: 'Bob Jones',    email: 'bob@ledgerline.com',    password, role: 'ACCOUNT_HOLDER'  },
-    { name: 'Eve Auditor',  email: 'auditor@ledgerline.com',password, role: 'AUDITOR'         },
-  ]);
-  console.log('Created users: admin, alice, bob, auditor');
+    const addTransaction = async (key, type, description, userId, amount, entries) => {
+      const { rows } = await client.query(
+        `INSERT INTO transactions (idempotency_key,type,description,initiated_by,amount_cents,currency)
+         VALUES ($1,$2,$3,$4,$5,'USD') RETURNING id`,
+        [key, type, description, userId, amount]
+      );
+      const transactionId = rows[0].id;
+      for (const [accountId, entryAmount] of entries) {
+        await client.query(
+          'INSERT INTO journal_entries (transaction_id,account_id,amount) VALUES ($1,$2,$3)',
+          [transactionId, accountId, entryAmount]
+        );
+      }
+    };
 
-  // ── Create accounts ────────────────────────────────────────────
-  const [aliceChecking, aliceSavings, bobChecking] = await Account.insertMany([
-    { user_id: alice._id, account_name: 'Alice Checking', account_type: 'ASSET', currency: 'USD', balance_cents: 0 },
-    { user_id: alice._id, account_name: 'Alice Savings',  account_type: 'ASSET', currency: 'USD', balance_cents: 0 },
-    { user_id: bob._id,   account_name: 'Bob Checking',   account_type: 'ASSET', currency: 'USD', balance_cents: 0 },
-  ]);
-  console.log('Created accounts: Alice Checking, Alice Savings, Bob Checking');
+    await addTransaction(
+      'seed-dep-alice-1', 'DEPOSIT', 'Initial deposit', alice, 50000,
+      [[aliceChecking, 50000], [null, -50000]]
+    );
+    await client.query('UPDATE accounts SET balance_cents = 50000 WHERE id = $1', [aliceChecking]);
+    await addTransaction(
+      'seed-dep-bob-1', 'DEPOSIT', 'Initial deposit', bob, 30000,
+      [[bobChecking, 30000], [null, -30000]]
+    );
+    await client.query('UPDATE accounts SET balance_cents = 30000 WHERE id = $1', [bobChecking]);
+    await addTransaction(
+      'seed-xfer-alice-1', 'TRANSFER', 'Move to savings', alice, 10000,
+      [[aliceChecking, -10000], [aliceSavings, 10000]]
+    );
+    await client.query('UPDATE accounts SET balance_cents = 40000 WHERE id = $1', [aliceChecking]);
+    await client.query('UPDATE accounts SET balance_cents = 10000 WHERE id = $1', [aliceSavings]);
+    await addTransaction(
+      'seed-wd-bob-1', 'WITHDRAWAL', 'ATM withdrawal', bob, 5000,
+      [[bobChecking, -5000], [null, 5000]]
+    );
+    await client.query('UPDATE accounts SET balance_cents = 25000 WHERE id = $1', [bobChecking]);
 
-  // ── Seed transactions ──────────────────────────────────────────
-  // 1. Deposit $500 into Alice Checking
-  const dep1 = await Transaction.create({
-    idempotency_key: 'seed-dep-alice-1', type: 'DEPOSIT',
-    description: 'Initial deposit', initiated_by: alice._id,
-    amount_cents: 50000, currency: 'USD',
-  });
-  await JournalEntry.create({ transaction_id: dep1._id, account_id: aliceChecking._id, amount: 50000 });
-  await Account.findByIdAndUpdate(aliceChecking._id, { $inc: { balance_cents: 50000 } });
-
-  // 2. Deposit $300 into Bob Checking
-  const dep2 = await Transaction.create({
-    idempotency_key: 'seed-dep-bob-1', type: 'DEPOSIT',
-    description: 'Initial deposit', initiated_by: bob._id,
-    amount_cents: 30000, currency: 'USD',
-  });
-  await JournalEntry.create({ transaction_id: dep2._id, account_id: bobChecking._id, amount: 30000 });
-  await Account.findByIdAndUpdate(bobChecking._id, { $inc: { balance_cents: 30000 } });
-
-  // 3. Transfer $100 from Alice Checking → Alice Savings
-  const xfer1 = await Transaction.create({
-    idempotency_key: 'seed-xfer-alice-1', type: 'TRANSFER',
-    description: 'Move to savings', initiated_by: alice._id,
-    amount_cents: 10000, currency: 'USD',
-  });
-  await JournalEntry.insertMany([
-    { transaction_id: xfer1._id, account_id: aliceChecking._id, amount: -10000 },
-    { transaction_id: xfer1._id, account_id: aliceSavings._id,  amount:  10000 },
-  ]);
-  await Account.findByIdAndUpdate(aliceChecking._id, { $inc: { balance_cents: -10000 } });
-  await Account.findByIdAndUpdate(aliceSavings._id,  { $inc: { balance_cents:  10000 } });
-
-  // 4. Withdraw $50 from Bob Checking
-  const wd1 = await Transaction.create({
-    idempotency_key: 'seed-wd-bob-1', type: 'WITHDRAWAL',
-    description: 'ATM withdrawal', initiated_by: bob._id,
-    amount_cents: 5000, currency: 'USD',
-  });
-  await JournalEntry.create({ transaction_id: wd1._id, account_id: bobChecking._id, amount: -5000 });
-  await Account.findByIdAndUpdate(bobChecking._id, { $inc: { balance_cents: -5000 } });
-
-  console.log('Seeded transactions: 2 deposits, 1 transfer, 1 withdrawal');
-
-  // ── Print final balances ───────────────────────────────────────
-  const accounts = await Account.find({});
-  console.log('\nFinal balances:');
-  accounts.forEach((a) => console.log(`  ${a.account_name}: $${(a.balance_cents / 100).toFixed(2)}`));
-
-  console.log('\n Demo login credentials (password: password123):');
-  console.log('  admin@ledgerline.com    → ADMIN');
-  console.log('  alice@ledgerline.com    → ACCOUNT_HOLDER');
-  console.log('  bob@ledgerline.com      → ACCOUNT_HOLDER');
-  console.log('  auditor@ledgerline.com  → AUDITOR');
-
-  await mongoose.disconnect();
-  console.log('\nSeed complete.');
+    await client.query('COMMIT');
+    console.log('Seeded demo users, accounts, and balanced transactions.');
+    console.log('Demo logins (password: password123):');
+    console.log('  admin@ledgerline.com (ADMIN)');
+    console.log('  alice@ledgerline.com (ACCOUNT_HOLDER)');
+    console.log('  bob@ledgerline.com (ACCOUNT_HOLDER)');
+    console.log('  auditor@ledgerline.com (AUDITOR)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+    await pool.end();
+  }
 }
 
-seed().catch((err) => {
-  console.error('Seed failed:', err);
-  process.exit(1);
+seed().catch(async (err) => {
+  console.error('Seed failed:', err.message);
+  try {
+    await pool.end();
+  } catch (closeError) {
+    console.error('Failed to close PostgreSQL pool:', closeError.message);
+  }
+  process.exitCode = 1;
 });
