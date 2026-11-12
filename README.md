@@ -102,6 +102,12 @@ npm test
 
 The test setup truncates tables in the configured test database.
 
+## Render MCP in VS Code
+
+The workspace includes a Render MCP server definition in `.mcp.json`. VS Code Copilot enables the workspace-root configuration with `.vscode/settings.json`. Open the workspace with Copilot selected as the session target, then start the `render` server and complete Render's OAuth authorization in your browser when prompted. No Render API key is stored in this repository.
+
+After connecting, select a workspace with a prompt such as **Set my Render workspace to [WORKSPACE_NAME]**. Render MCP can modify service environment variables and trigger deploys, so review and approve tool calls carefully.
+
 ## Docker
 
 Set `JWT_SECRET` in the environment (or root `.env`) and run:
