@@ -19,6 +19,14 @@ http.interceptors.response.use(
       return Promise.reject(err);
     }
 
+    const responseBody = err.response.data;
+    if (err.response.status === 500
+      && typeof responseBody === 'string'
+      && /proxy error|econnrefused/i.test(responseBody)) {
+      err.userMessage = 'The API is not running. Start PostgreSQL, set DATABASE_URL in the project .env file, then start the backend with "Set-Location server; npm run dev".';
+      return Promise.reject(err);
+    }
+
     // Auto-logout on 401 (expired/invalid token) but NOT on /auth routes
     if (err.response.status === 401 && !err.config.url.includes('/auth/')) {
       localStorage.removeItem('ll_token');
@@ -37,7 +45,10 @@ http.interceptors.response.use(
 export const getErrorMessage = (err) => {
   if (err.userMessage) return err.userMessage;
   if (!err.response)   return 'Cannot reach the server. Is the backend running?';
-  return err.response?.data?.error || `Server error (${err.response.status})`;
+  if (typeof err.response.data === 'string') {
+    return err.response.data || `Server error (${err.response.status})`;
+  }
+  return err.response.data?.error || `Server error (${err.response.status})`;
 };
 
 // ── Auth ──────────────────────────────────────────────────────────
