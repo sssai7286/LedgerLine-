@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 export default function AuthPage() {
   const { storeAuth } = useAuth();
   const [mode,  setMode]  = useState('login'); // 'login' | 'register'
+  const [loginType, setLoginType] = useState('user');
   const [form,  setForm]  = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [busy,  setBusy]  = useState(false);
@@ -15,7 +16,7 @@ export default function AuthPage() {
     setBusy(true);
     try {
       const data = mode === 'login'
-        ? await login({ email: form.email, password: form.password })
+        ? await login({ email: form.email, password: form.password, login_type: loginType })
         : await register(form);
       storeAuth(data);
     } catch (err) {
@@ -42,6 +43,28 @@ export default function AuthPage() {
             </button>
           ))}
         </div>
+
+        {mode === 'login' && (
+          <div style={s.loginTypes} role="group" aria-label="Choose login type">
+            <button
+              type="button"
+              onClick={() => { setLoginType('user'); setError(''); }}
+              style={{ ...s.loginType, ...(loginType === 'user' ? s.loginTypeActive : {}) }}
+              aria-pressed={loginType === 'user'}
+            >
+              User login
+            </button>
+            <button
+              type="button"
+              onClick={() => { setLoginType('admin_staff'); setError(''); }}
+              style={{ ...s.loginType, ...(loginType === 'admin_staff' ? s.loginTypeActive : {}) }}
+              aria-pressed={loginType === 'admin_staff'}
+            >
+              Admin / Staff login
+            </button>
+            <span style={s.loginHint}>Staff login is for administrator and auditor accounts.</span>
+          </div>
+        )}
 
         <form onSubmit={handle} style={s.form}>
           {mode === 'register' && (
@@ -91,6 +114,10 @@ const s = {
   tabs:      { display: 'flex', marginBottom: 24, borderRadius: 8, overflow: 'hidden', border: '1px solid #334155' },
   tab:       { flex: 1, padding: '10px', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 14 },
   tabActive: { background: '#2563eb', color: '#fff' },
+  loginTypes: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7, marginBottom: 18 },
+  loginType: { padding: '9px 7px', border: '1px solid #334155', borderRadius: 7, background: '#0f172a', color: '#94a3b8', cursor: 'pointer', fontSize: 12, fontWeight: 600 },
+  loginTypeActive: { border: '1px solid #3b82f6', background: '#1d4ed8', color: '#fff' },
+  loginHint: { gridColumn: '1 / -1', color: '#94a3b8', fontSize: 11 },
   form:      { display: 'flex', flexDirection: 'column', gap: 12 },
   input:     { padding: '10px 14px', borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#f1f5f9', fontSize: 14 },
   btn:       { padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 15, fontWeight: 600, marginTop: 4 },

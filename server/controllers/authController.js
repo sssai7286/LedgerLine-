@@ -62,9 +62,12 @@ const register = async (req, res) => {
 };
 
 const login = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, login_type: loginType } = req.body;
   if (typeof email !== 'string' || !email.trim() || typeof password !== 'string' || !password) {
     return res.status(400).json({ error: 'email and password are required' });
+  }
+  if (loginType != null && !['user', 'admin_staff'].includes(loginType)) {
+    return res.status(400).json({ error: 'login_type must be user or admin_staff' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -75,11 +78,16 @@ const login = async (req, res) => {
     );
     const user = rows[0];
 
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    const validPassword = user && await bcrypt.compare(password, user.password);
+    const matchesLoginType = !loginType
+      || (loginType === 'user' && user?.role === 'ACCOUNT_HOLDER')
+      || (loginType === 'admin_staff' && ['ADMIN', 'AUDITOR'].includes(user?.role));
+
+    if (!validPassword || !matchesLoginType) {
       await pool.query(
         `INSERT INTO audit_logs (user_email, action, ip, status, meta)
          VALUES ($1,'AUTH_LOGIN',$2,'FAILURE',$3)`,
-        [normalizedEmail, req.ip, JSON.stringify({ reason: 'Invalid credentials' })]
+        [normalizedEmail, req.ip, JSON.stringify({ reason: 'Invalid credentials or login type mismatch' })]
       );
       return res.status(401).json({ error: 'Invalid email or password' });
     }

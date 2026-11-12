@@ -48,9 +48,41 @@ describe('Authentication', () => {
 
     it('returns token on valid credentials', async () => {
       const res = await request(app).post('/api/auth/login')
-        .send({ email: user.email, password: user.password });
+        .send({ email: user.email, password: user.password, login_type: 'user' });
       expect(res.status).toBe(200);
       expect(res.body.token).toBeDefined();
+    });
+
+    it('rejects account holders selecting admin or staff login', async () => {
+      const res = await request(app).post('/api/auth/login')
+        .send({ email: user.email, password: user.password, login_type: 'admin_staff' });
+      expect(res.status).toBe(401);
+      expect(res.body.error).toMatch(/invalid email or password/i);
+    });
+
+    it('allows admins and auditors through admin/staff login only', async () => {
+      const { pool } = require('../config/db');
+      for (const role of ['ADMIN', 'AUDITOR']) {
+        const email = `${role.toLowerCase()}-staff@ledger.com`;
+        const registered = await request(app).post('/api/auth/register')
+          .send({ ...user, email });
+        await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, registered.body.user.id]);
+
+        const staffLogin = await request(app).post('/api/auth/login')
+          .send({ email, password: user.password, login_type: 'admin_staff' });
+        expect(staffLogin.status).toBe(200);
+        expect(staffLogin.body.user.role).toBe(role);
+
+        const userLogin = await request(app).post('/api/auth/login')
+          .send({ email, password: user.password, login_type: 'user' });
+        expect(userLogin.status).toBe(401);
+      }
+    });
+
+    it('rejects unknown login types', async () => {
+      const res = await request(app).post('/api/auth/login')
+        .send({ email: user.email, password: user.password, login_type: 'superuser' });
+      expect(res.status).toBe(400);
     });
 
     it('rejects wrong password with 401', async () => {
