@@ -56,13 +56,21 @@ export default function AuthPage() {
             </button>
             <button
               type="button"
-              onClick={() => { setLoginType('admin_staff'); setError(''); }}
-              style={{ ...s.loginType, ...(loginType === 'admin_staff' ? s.loginTypeActive : {}) }}
-              aria-pressed={loginType === 'admin_staff'}
+              onClick={() => { setLoginType('admin'); setError(''); }}
+              style={{ ...s.loginType, ...(loginType === 'admin' ? s.loginTypeActive : {}) }}
+              aria-pressed={loginType === 'admin'}
             >
-              Admin / Staff login
+              Admin login
             </button>
-            <span style={s.loginHint}>Staff login is for administrator and auditor accounts.</span>
+            <button
+              type="button"
+              onClick={() => { setLoginType('auditor'); setError(''); }}
+              style={{ ...s.loginType, ...(loginType === 'auditor' ? s.loginTypeActive : {}) }}
+              aria-pressed={loginType === 'auditor'}
+            >
+              Auditor login
+            </button>
+            <span style={s.loginHint}>Choose the login type assigned to your account.</span>
           </div>
         )}
 
@@ -114,7 +122,7 @@ const s = {
   tabs:      { display: 'flex', marginBottom: 24, borderRadius: 8, overflow: 'hidden', border: '1px solid #334155' },
   tab:       { flex: 1, padding: '10px', background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 14 },
   tabActive: { background: '#2563eb', color: '#fff' },
-  loginTypes: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7, marginBottom: 18 },
+  loginTypes: { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 7, marginBottom: 18 },
   loginType: { padding: '9px 7px', border: '1px solid #334155', borderRadius: 7, background: '#0f172a', color: '#94a3b8', cursor: 'pointer', fontSize: 12, fontWeight: 600 },
   loginTypeActive: { border: '1px solid #3b82f6', background: '#1d4ed8', color: '#fff' },
   loginHint: { gridColumn: '1 / -1', color: '#94a3b8', fontSize: 11 },

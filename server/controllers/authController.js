@@ -66,8 +66,8 @@ const login = async (req, res) => {
   if (typeof email !== 'string' || !email.trim() || typeof password !== 'string' || !password) {
     return res.status(400).json({ error: 'email and password are required' });
   }
-  if (loginType != null && !['user', 'admin_staff'].includes(loginType)) {
-    return res.status(400).json({ error: 'login_type must be user or admin_staff' });
+  if (loginType != null && !['user', 'admin', 'auditor'].includes(loginType)) {
+    return res.status(400).json({ error: 'login_type must be user, admin, or auditor' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -81,7 +81,8 @@ const login = async (req, res) => {
     const validPassword = user && await bcrypt.compare(password, user.password);
     const matchesLoginType = !loginType
       || (loginType === 'user' && user?.role === 'ACCOUNT_HOLDER')
-      || (loginType === 'admin_staff' && ['ADMIN', 'AUDITOR'].includes(user?.role));
+      || (loginType === 'admin' && user?.role === 'ADMIN')
+      || (loginType === 'auditor' && user?.role === 'AUDITOR');
 
     if (!validPassword || !matchesLoginType) {
       await pool.query(
