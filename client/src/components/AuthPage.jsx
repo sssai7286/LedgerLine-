@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { login, register } from '../api/api';
+import { login, register, getErrorMessage } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 
 export default function AuthPage() {
@@ -19,7 +19,7 @@ export default function AuthPage() {
         : await register(form);
       storeAuth(data);
     } catch (err) {
-      setError(err.response?.data?.error || 'Something went wrong');
+      setError(getErrorMessage(err));
     } finally {
       setBusy(false);
     }

@@ -9,18 +9,36 @@ http.interceptors.request.use((config) => {
   return config;
 });
 
-// Auto-logout on 401
+// Handle response errors globally
 http.interceptors.response.use(
   (r) => r,
   (err) => {
-    if (err.response?.status === 401) {
+    // Network error — backend is down / unreachable
+    if (!err.response) {
+      err.userMessage = 'Cannot reach the server. Make sure the backend is running on port 5000 and MongoDB is connected.';
+      return Promise.reject(err);
+    }
+
+    // Auto-logout on 401 (expired/invalid token) but NOT on /auth routes
+    if (err.response.status === 401 && !err.config.url.includes('/auth/')) {
       localStorage.removeItem('ll_token');
       localStorage.removeItem('ll_user');
-      window.location.href = '/';
+      // Redirect only if we are not already on the login page
+      if (window.location.pathname !== '/') {
+        window.location.href = '/';
+      }
     }
+
     return Promise.reject(err);
   }
 );
+
+// Helper to extract error message from any axios error
+export const getErrorMessage = (err) => {
+  if (err.userMessage) return err.userMessage;
+  if (!err.response)   return 'Cannot reach the server. Is the backend running?';
+  return err.response?.data?.error || `Server error (${err.response.status})`;
+};
 
 // ── Auth ──────────────────────────────────────────────────────────
 export const register = (d) => http.post('/auth/register', d).then((r) => r.data);

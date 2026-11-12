@@ -6,6 +6,7 @@ import AccountList         from './components/AccountList';
 import LedgerOperations    from './components/LedgerOperations';
 import TransactionHistory  from './components/TransactionHistory';
 import AuditLogViewer      from './components/AuditLogViewer';
+import ServerStatus        from './components/ServerStatus';
 
 function Dashboard() {
   const { user } = useAuth();
@@ -45,6 +46,7 @@ function AppInner() {
 export default function App() {
   return (
     <AuthProvider>
+      <ServerStatus />
       <AppInner />
     </AuthProvider>
   );
